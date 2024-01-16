@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "faebot-twitch"
+version = "0.1.0"
+description = "Faebot AI Chatbot for twitch"
+authors = ["transfaeries"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+twitchapi = "^4.1.0"
+
+
+[tool.poetry.group.dev.dependencies]
+pdbpp = "^0.10.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

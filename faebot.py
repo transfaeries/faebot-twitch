@@ -5,11 +5,13 @@ from twitchAPI.chat import Chat, EventData, ChatMessage, ChatSub, ChatCommand
 import asyncio
 import os
 import logging
+import replicate
+from dataclasses import dataclass
 
 APP_ID = os.getenv("TWITCH_APP_ID", "")
 APP_SECRET = os.getenv("TWITCH_TOKEN", "")
 USER_SCOPE = [AuthScope.CHAT_READ, AuthScope.CHAT_EDIT]
-TARGET_CHANNEL = 'transfaeries'
+TARGET_CHANNEL = os.getenv("LIST_CHANNELS", ["transfaeries", "faebot_01"])
 
 # set up logging
 logging.basicConfig(
@@ -19,9 +21,20 @@ logging.basicConfig(
 )
 
 
+## define a dataclass to store conversations
+@dataclass
+class Conversation:
+    """for storing conversations"""
+
+    id: int
+    channel: str
+    chatlog: list[str]  # dict[int, Message]
+    prompt: str
+
+
 # this will be called when the event READY is triggered, which will be on bot start
 async def on_ready(ready_event: EventData):
-    print('Bot is ready for work, joining channels')
+    logging.info("Bot is ready for work, joining channels")
     # join our target channel, if you want to join multiple, either call join for each individually
     # or even better pass a list of channels as the argument
     await ready_event.chat.join_room(TARGET_CHANNEL)
@@ -30,22 +43,24 @@ async def on_ready(ready_event: EventData):
 
 # this will be called whenever a message in a channel was send by either the bot OR another user
 async def on_message(msg: ChatMessage):
-    print(f'in {msg.room.name}, {msg.user.name} said: {msg.text}')
+    logging.info(f"in {msg.room.name}, {msg.user.name} said: {msg.text}")
 
 
 # this will be called whenever someone subscribes to a channel
 async def on_sub(sub: ChatSub):
-    print(f'New subscription in {sub.room.name}:\\n'
-          f'  Type: {sub.sub_plan}\\n'
-          f'  Message: {sub.sub_message}')
+    print(
+        f"New subscription in {sub.room.name}:\\n"
+        f"  Type: {sub.sub_plan}\\n"
+        f"  Message: {sub.sub_message}"
+    )
 
 
 # this will be called whenever the !reply command is issued
-async def test_command(cmd: ChatCommand):
+async def ping(cmd: ChatCommand):
     if len(cmd.parameter) == 0:
-        await cmd.reply('you did not tell me what to reply with')
+        await cmd.reply("pong")
     else:
-        await cmd.reply(f'{cmd.user.name}: {cmd.parameter}')
+        await cmd.reply(f"pong {cmd.parameter}")
 
 
 # this is where we set up the bot
@@ -70,15 +85,14 @@ async def run():
     # there are more events, you can view them all in this documentation
 
     # you can directly register commands and their handlers, this will register the !reply command
-    chat.register_command('reply', test_command)
-
+    chat.register_command("ping", ping)
 
     # we are done with our setup, lets start this bot up!
     chat.start()
 
     # lets run till we press enter in the console
     try:
-        input('press ENTER to stop\n')
+        input("press ENTER to stop\n")
     finally:
         # now we can close the chat bot and the twitch api client
         chat.stop()

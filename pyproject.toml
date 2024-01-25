@@ -8,10 +8,14 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 twitchapi = "^4.1.0"
+replicate = "^0.23.0"
+twitchio = "^2.8.2"
 
 
 [tool.poetry.group.dev.dependencies]
 pdbpp = "^0.10.3"
+black = "^23.12.1"
+ipython = "^8.20.0"
 
 [build-system]
 requires = ["poetry-core"]

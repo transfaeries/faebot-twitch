@@ -6,7 +6,8 @@ Faebot AI chatbot for twitch
 - port the AI functionality from faediscord ✅
 - add on-the-fly prompt editing
 - deploy to fly.io
-
+- implemtr history trimming
+- twitch character limit is 500
 
 
  

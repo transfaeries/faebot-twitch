@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", ["transfaeries", "faebot_01"])
-AI_MODEL = os.getenv("MODEL", "meta/llama-2-7b-chat" )
+AI_MODEL = os.getenv("MODEL", "meta/llama-2-13b-chat" )
 
 
 # set up logging
@@ -37,7 +37,7 @@ class Faebot(commands.Bot):
         self.conversations: dict[str, Conversation] = {}
 
         super().__init__(
-            token=TWITCH_TOKEN, prefix="!", initial_channels=INITIAL_CHANNELS
+            token=TWITCH_TOKEN, prefix="fb;", initial_channels=INITIAL_CHANNELS
         )
 
     async def event_ready(self):
@@ -62,7 +62,15 @@ class Faebot(commands.Bot):
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
             )
-        if message.content.startswith('!'):
+
+        # ## don't reply to fossabot
+        # if message.author.name == "fossabot":
+        #     logging.info("bot message, ignore")
+        #     return 
+
+
+        ##command, execute command if appropriate otherwise return out
+        if message.content.startswith('!') or message.content.startswith('fb;'):
             return await self.handle_commands(message)
         
         ## log message
@@ -137,7 +145,7 @@ class Faebot(commands.Bot):
                 "prompt": prompt,
                 "temperature": 0.7,
                 "system_prompt": system_prompt,
-                "max_new_tokens": 250,
+                "max_new_tokens": 75,
                 "min_new_tokens": -1,
             },
         )

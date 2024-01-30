@@ -1,17 +1,16 @@
-from twitchAPI.twitch import Twitch
-from twitchAPI.oauth import UserAuthenticator
-from twitchAPI.type import AuthScope, ChatEvent
-from twitchAPI.chat import Chat, EventData, ChatMessage, ChatSub, ChatCommand
-import asyncio
+from twitchio import Message, InvalidContent
+from twitchio.ext import commands
 import os
 import logging
 import replicate
-from dataclasses import dataclass
+from random import randrange
+from dataclasses import dataclass, field
 
-APP_ID = os.getenv("TWITCH_APP_ID", "")
-APP_SECRET = os.getenv("TWITCH_TOKEN", "")
-USER_SCOPE = [AuthScope.CHAT_READ, AuthScope.CHAT_EDIT]
-TARGET_CHANNEL = os.getenv("LIST_CHANNELS", ["transfaeries", "faebot_01"])
+
+TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
+INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", ["transfaeries", "faebot_01"])
+AI_MODEL = os.getenv("MODEL", "meta/llama-2-13b-chat" )
+
 
 # set up logging
 logging.basicConfig(
@@ -21,83 +20,173 @@ logging.basicConfig(
 )
 
 
-## define a dataclass to store conversations
 @dataclass
 class Conversation:
     """for storing conversations"""
 
-    id: int
     channel: str
-    chatlog: list[str]  # dict[int, Message]
-    prompt: str
+    chatlog: list = field(default_factory=list)  # dict[int, Message]
+    conversants: list = field(default_factory=list)
+    system_prompt: str = ""
+    frequency: int = 5
+    history: int = 10
 
 
-# this will be called when the event READY is triggered, which will be on bot start
-async def on_ready(ready_event: EventData):
-    logging.info("Bot is ready for work, joining channels")
-    # join our target channel, if you want to join multiple, either call join for each individually
-    # or even better pass a list of channels as the argument
-    await ready_event.chat.join_room(TARGET_CHANNEL)
-    # you can do other bot initialization things in here
+class Faebot(commands.Bot):
+    def __init__(self):
+        # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
+        self.conversations: dict[str, Conversation] = {}
+
+        super().__init__(
+            token=TWITCH_TOKEN, prefix="fb;", initial_channels=INITIAL_CHANNELS
+        )
+
+    async def event_ready(self):
+        # We are logged in and ready to chat and use commands...
+        logging.info(f"Logged in as | {self.nick}")
+        logging.info(f"User id is | {self.user_id}")
+
+    async def event_message(self, message):
+        # Messages with echo set to True are messages sent by the bot...
+        # For now we just want to ignore them...
+        if message.echo:
+            return
+
+        # Print the contents of our message to console...
+        logging.info(f"received message: {message.author}: {message.content}")
+        logging.info(f"channel object {message.channel.name}")
+        if message.channel.name not in self.conversations:
+            self.conversations[message.channel.name] = Conversation(
+                channel=message.channel.name,
+                system_prompt=f"""You are an AI chatbot called faebot. \n
+                                You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about the game the streamer is playing or whatever they are doing." 
+                                You always make sure your messages are below the twitch character limit which is 500 characters. \n This is the conversation log: \n"""
+            )
+            logging.info(
+                f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
+            )
+        
 
 
-# this will be called whenever a message in a channel was send by either the bot OR another user
-async def on_message(msg: ChatMessage):
-    logging.info(f"in {msg.room.name}, {msg.user.name} said: {msg.text}")
+        ##command, execute command if appropriate otherwise return out
+        if message.content.startswith('!') or message.content.startswith('fb;'):
+            return await self.handle_commands(message)
+        
+        ## log message
+        self.conversations[message.channel.name].chatlog.append(f"{message.author.name}: {message.content}")
+
+        chance = randrange(self.conversations[message.channel.name].frequency)
+        if "faebot" in message.content or chance == 0:
+            logging.info(f"rolled a 0 generating!")
+            return await self.generate_response(message)
+        
+        else:
+            logging.info(f"rolled a {chance}, not generating!")
+
+    async def generate_response(self, message):
+        """prompt the GenAI API for a message"""
 
 
-# this will be called whenever someone subscribes to a channel
-async def on_sub(sub: ChatSub):
-    print(
-        f"New subscription in {sub.room.name}:\\n"
-        f"  Type: {sub.sub_plan}\\n"
-        f"  Message: {sub.sub_message}"
-    )
+        if len(self.conversations[message.channel.name].chatlog)>self.conversations[message.channel.name].history:
+            logging.info(f"message history has exceeded the set history length of {self.conversations[message.channel.name].history}")
+            self.conversations[message.channel.name].chatlog = self.conversations[message.channel.name].chatlog[len(self.conversations[message.channel.name].chatlog)-20:]
 
 
-# this will be called whenever the !reply command is issued
-async def ping(cmd: ChatCommand):
-    if len(cmd.parameter) == 0:
-        await cmd.reply("pong")
-    else:
-        await cmd.reply(f"pong {cmd.parameter}")
+        prompt = (
+            "\n".join(self.conversations[message.channel.name].chatlog)
+            + "\nfaebot:"
+        )
+        logging.info(f"system_prompt: {self.conversations[message.channel.name].system_prompt}, \n prompt: {prompt}")
+        response = await self.generate(
+            prompt=prompt,
+            author=message.author.display_name,
+            system_prompt=self.conversations[message.channel.name].system_prompt,
+        )
+        logging.info(f"received response: {response}")
+        
+        try:
+            await message.channel.send(response)
+        except InvalidContent:
+            logging.info("generated content exceeded 500 characters, trimming and posting.")
+            response = response[0:499]+"–"
+            await message.channel.send(response)
+        except: 
+            logging.info("Unknown error has occured, please contact the administrator.")
+            response = "Oops, something strange has happened. Please let the transfaeries know!"
+            await message.channel.send(response)
+        
+        self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
+        
+
+    @commands.command()
+    async def hello(self, ctx: commands.Context):
+        # Send a hello back!
+        await ctx.send(f"Hello {ctx.author.name}!")
+
+    @commands.command()
+    async def ping(self, ctx: commands.Context):
+        # Send a hello back!
+        message = ctx.message.content
+        message_tokens = message.split(" ")
+        await ctx.send(f'pong {" ".join(message_tokens[1:])}')
+
+    @commands.command()
+    async def freq(self, ctx: commands.Context):
+        if not ctx.author.is_mod:
+            return await ctx.send(f'sorry you need to be a mod to use that command')\
+       
+        arguments = ctx.message.content.split(" ")
+        if len(arguments)>1:
+            if str(arguments[1]).isdigit():
+                self.conversations[ctx.channel.name].frequency=int(arguments[1])
+                return await ctx.send(f"changed message frequency in this channel to {self.conversations[ctx.channel.name].frequency}")
+        
+        return await ctx.send(f"current frequency is {self.conversations[ctx.channel.name].frequency}")
+    
+        
 
 
-# this is where we set up the bot
-async def run():
-    # set up twitch api instance and add user authentication with some scopes
-    twitch = await Twitch(APP_ID, APP_SECRET)
-    auth = UserAuthenticator(twitch, USER_SCOPE)
-    token, refresh_token = await auth.authenticate()
-    await twitch.set_user_authentication(token, USER_SCOPE, refresh_token)
+    async def generate(
+        self,
+        prompt: str = "",
+        author="",
+        model=AI_MODEL,
+        system_prompt="",
+    ) -> str:
+        """generates completions with the replicate api"""
 
-    # create chat instance
-    chat = await Chat(twitch)
+        output = replicate.run(
+            model,
+            input={
+                "debug": False,
+                "top_k": 50,
+                "top_p": 1,
+                "prompt": prompt,
+                "temperature": 0.7,
+                "system_prompt": system_prompt,
+                "max_new_tokens": 150,
+                "min_new_tokens": -1,
+            },
+        )
+        response = "".join(output)
+        return response
 
-    # register the handlers for the events you want
-
-    # listen to when the bot is done starting up and ready to join channels
-    chat.register_event(ChatEvent.READY, on_ready)
-    # listen to chat messages
-    chat.register_event(ChatEvent.MESSAGE, on_message)
-    # listen to channel subscriptions
-    chat.register_event(ChatEvent.SUB, on_sub)
-    # there are more events, you can view them all in this documentation
-
-    # you can directly register commands and their handlers, this will register the !reply command
-    chat.register_command("ping", ping)
-
-    # we are done with our setup, lets start this bot up!
-    chat.start()
-
-    # lets run till we press enter in the console
-    try:
-        input("press ENTER to stop\n")
-    finally:
-        # now we can close the chat bot and the twitch api client
-        chat.stop()
-        await twitch.close()
+    # # The meta/llama-2-13b-chat model can stream output as it's running.
+    # for event in replicate.stream(
+    #     "meta/llama-2-13b-chat",
+    #     input={
+    #         "debug": False,
+    #         "top_k": 50,
+    #         "top_p": 1,
+    #         "prompt": "Write a story in the style of James Joyce. The story should be about a trip to the Irish countryside in 2083, to see the beautiful scenery and robots.",
+    #         "temperature": 0.75,
+    #         "system_prompt": "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.\n\nIf a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.",
+    #         "max_new_tokens": 500,
+    #         "min_new_tokens": -1
+    #     },
+    # ):
+    #     print(str(event), end="")
 
 
-# lets run our setup
-asyncio.run(run())
+bot = Faebot()
+bot.run()

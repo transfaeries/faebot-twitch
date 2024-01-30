@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
-INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", ["transfaeries", "faebot_01"])
-AI_MODEL = os.getenv("MODEL", "meta/llama-2-13b-chat" )
+INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS","transfaeries,faebot_01").split(",")
+MODEL = os.getenv("MODEL", "meta/llama-2-13b-chat" )
+ADMIN = os.getenv("ADMIN", "transfaeries").split(",")
+
 
 
 # set up logging
@@ -30,13 +32,13 @@ class Conversation:
     system_prompt: str = ""
     frequency: int = 5
     history: int = 10
+    model: str = MODEL
 
 
 class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
-
         super().__init__(
             token=TWITCH_TOKEN, prefix="fb;", initial_channels=INITIAL_CHANNELS
         )
@@ -58,9 +60,9 @@ class Faebot(commands.Bot):
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
-                system_prompt=f"""You are an AI chatbot called faebot. \n
-                                You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about the game the streamer is playing or whatever they are doing." 
-                                You always make sure your messages are below the twitch character limit which is 500 characters. \n This is the conversation log: \n"""
+                system_prompt=(f"You are an AI chatbot called faebot. \n"
+                                f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. You don't ask a lot of questions. \n"
+                                "You always make sure your messages are below the twitch character limit which is 500 characters.")
             )
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
@@ -75,9 +77,12 @@ class Faebot(commands.Bot):
         ## log message
         self.conversations[message.channel.name].chatlog.append(f"{message.author.name}: {message.content}")
 
-        chance = randrange(self.conversations[message.channel.name].frequency)
+        if self.conversations[message.channel.name].frequency<1:
+            chance =1
+        else:
+            chance = randrange(self.conversations[message.channel.name].frequency)
         if "faebot" in message.content or chance == 0:
-            logging.info(f"rolled a 0 generating!")
+            logging.info(f"rolled a {chance} generating!")
             return await self.generate_response(message)
         
         else:
@@ -94,10 +99,11 @@ class Faebot(commands.Bot):
 
         prompt = (
             "\n".join(self.conversations[message.channel.name].chatlog)
-            + "\nfaebot:"
+            +"\nfaebot:"
         )
-        logging.info(f"system_prompt: {self.conversations[message.channel.name].system_prompt}, \n prompt: {prompt}")
+        logging.info(f"model: {self.conversations[message.channel.name].model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}")
         response = await self.generate(
+            model=self.conversations[message.channel.name].model,
             prompt=prompt,
             author=message.author.display_name,
             system_prompt=self.conversations[message.channel.name].system_prompt,
@@ -116,22 +122,37 @@ class Faebot(commands.Bot):
             await message.channel.send(response)
         
         self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
+        return
         
 
+    ## commands for everyone ##
     @commands.command()
     async def hello(self, ctx: commands.Context):
-        # Send a hello back!
+        """say hello get said hello back"""
         await ctx.send(f"Hello {ctx.author.name}!")
 
     @commands.command()
     async def ping(self, ctx: commands.Context):
-        # Send a hello back!
+        """ping the bot"""
         message = ctx.message.content
         message_tokens = message.split(" ")
         await ctx.send(f'pong {" ".join(message_tokens[1:])}')
 
+
+    @commands.command()
+    async def help(self, ctx: commands.Context):
+        """display the help message"""
+        await ctx.reply(f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. If you'd like to add faebot to your channel message transfaeries . I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'")
+
+    @commands.command()
+    async def mods(self, ctx: commands.Context):
+        """display the mods command message"""
+        await ctx.reply(f"If you're a mod in a channel I'm in, you can edit how frequently I respond to messages with the 'fb;freq' command. Set it to 1 to have me always reply, set it to 0 to have me never reply. I'll still reply to messages with my name on them and commands")
+
+    ## commands for mods ##
     @commands.command()
     async def freq(self, ctx: commands.Context):
+        """check or change message frequency in this channel"""
         if not ctx.author.is_mod:
             return await ctx.send(f'sorry you need to be a mod to use that command')\
        
@@ -141,8 +162,57 @@ class Faebot(commands.Bot):
                 self.conversations[ctx.channel.name].frequency=int(arguments[1])
                 return await ctx.send(f"changed message frequency in this channel to {self.conversations[ctx.channel.name].frequency}")
         
-        return await ctx.send(f"current frequency is {self.conversations[ctx.channel.name].frequency}")
+        return await ctx.send(f"current message frequency in this channel is {self.conversations[ctx.channel.name].frequency}")
     
+    @commands.command()
+    async def hist(self, ctx: commands.Context):
+        """check or change message history length in the channel"""
+        if not ctx.author.is_mod:
+            return await ctx.send(f'sorry you need to be a mod to use that command')\
+       
+        arguments = ctx.message.content.split(" ")
+        if len(arguments)>1:
+            if str(arguments[1]).isdigit():
+                self.conversations[ctx.channel.name].history=int(arguments[1])
+                return await ctx.send(f"changed message history length in this channel to {self.conversations[ctx.channel.name].history}")
+        
+        return await ctx.send(f"current message history length in this channel is {self.conversations[ctx.channel.name].history}")
+    
+    @commands.command()
+    async def prompt(self, ctx: commands.Context):
+        """check or change the system prompt in the channel"""
+        if not ctx.author.is_mod:
+            return await ctx.send(f'sorry you need to be a mod to use that command')\
+       
+        arguments = ctx.message.content.split(" ")
+        if len(arguments)>1:
+            self.conversations[ctx.channel.name].system_prompt=' '.join(arguments[1:])
+            return await ctx.send(f"changed system prompt in this channel to {self.conversations[ctx.channel.name].system_prompt}")
+        
+        return await ctx.send(f"current system_prompt in this channel is {self.conversations[ctx.channel.name].system_prompt}")
+    
+    @commands.command()
+    async def clear(self, ctx: commands.Context):
+        """check or change the system prompt in the channel"""
+        if not ctx.author.is_mod:
+            return await ctx.send(f'sorry you need to be a mod to use that command')\
+       
+        self.conversations[ctx.channel.name].chatlog = []
+        return await ctx.reply("message history has been cleared. faebot has forgotten")
+    
+    ### commands for admins ###
+    @commands.command()
+    async def model(self, ctx: commands.Context):
+        """check or change the system prompt in the channel"""
+        if not ctx.author.name in ADMIN:
+            return await ctx.send(f'sorry you need to be an admin to use that command')\
+       
+        arguments = ctx.message.content.split(" ")
+        if len(arguments)>1:
+            self.conversations[ctx.channel.name].model=' '.join(arguments[1:])
+            return await ctx.send(f"changed model in this channel to {self.conversations[ctx.channel.name].model}")
+        
+        return await ctx.send(f"current model in this channel is {self.conversations[ctx.channel.name].model}")
         
 
 
@@ -150,7 +220,7 @@ class Faebot(commands.Bot):
         self,
         prompt: str = "",
         author="",
-        model=AI_MODEL,
+        model=MODEL,
         system_prompt="",
     ) -> str:
         """generates completions with the replicate api"""

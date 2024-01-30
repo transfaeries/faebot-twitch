@@ -1,4 +1,4 @@
-from twitchio import Message
+from twitchio import Message, InvalidContent
 from twitchio.ext import commands
 import os
 import logging
@@ -29,6 +29,7 @@ class Conversation:
     conversants: list = field(default_factory=list)
     system_prompt: str = ""
     frequency: int = 5
+    history: int = 10
 
 
 class Faebot(commands.Bot):
@@ -57,16 +58,14 @@ class Faebot(commands.Bot):
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
-                system_prompt=f"You are an AI chatbot called faebot. You are hanging out in {message.channel.name}'s chat. This is the conversation log: \n",
+                system_prompt=f"""You are an AI chatbot called faebot. \n
+                                You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about the game the streamer is playing or whatever they are doing." 
+                                You always make sure your messages are below the twitch character limit which is 500 characters. \n This is the conversation log: \n"""
             )
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
             )
-
-        # ## don't reply to fossabot
-        # if message.author.name == "fossabot":
-        #     logging.info("bot message, ignore")
-        #     return 
+        
 
 
         ##command, execute command if appropriate otherwise return out
@@ -78,7 +77,7 @@ class Faebot(commands.Bot):
 
         chance = randrange(self.conversations[message.channel.name].frequency)
         if "faebot" in message.content or chance == 0:
-            logging.info(f"generating!")
+            logging.info(f"rolled a 0 generating!")
             return await self.generate_response(message)
         
         else:
@@ -86,6 +85,12 @@ class Faebot(commands.Bot):
 
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
+
+
+        if len(self.conversations[message.channel.name].chatlog)>self.conversations[message.channel.name].history:
+            logging.info(f"message history has exceeded the set history length of {self.conversations[message.channel.name].history}")
+            self.conversations[message.channel.name].chatlog = self.conversations[message.channel.name].chatlog[len(self.conversations[message.channel.name].chatlog)-20:]
+
 
         prompt = (
             "\n".join(self.conversations[message.channel.name].chatlog)
@@ -97,7 +102,21 @@ class Faebot(commands.Bot):
             author=message.author.display_name,
             system_prompt=self.conversations[message.channel.name].system_prompt,
         )
-        await message.channel.send(response)
+        logging.info(f"received response: {response}")
+        
+        try:
+            await message.channel.send(response)
+        except InvalidContent:
+            logging.info("generated content exceeded 500 characters, trimming and posting.")
+            response = response[0:499]+"–"
+            await message.channel.send(response)
+        except: 
+            logging.info("Unknown error has occured, please contact the administrator.")
+            response = "Oops, something strange has happened. Please let the transfaeries know!"
+            await message.channel.send(response)
+        
+        self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
+        
 
     @commands.command()
     async def hello(self, ctx: commands.Context):
@@ -112,7 +131,7 @@ class Faebot(commands.Bot):
         await ctx.send(f'pong {" ".join(message_tokens[1:])}')
 
     @commands.command()
-    async def setfreq(self, ctx: commands.Context):
+    async def freq(self, ctx: commands.Context):
         if not ctx.author.is_mod:
             return await ctx.send(f'sorry you need to be a mod to use that command')\
        
@@ -145,7 +164,7 @@ class Faebot(commands.Bot):
                 "prompt": prompt,
                 "temperature": 0.7,
                 "system_prompt": system_prompt,
-                "max_new_tokens": 75,
+                "max_new_tokens": 150,
                 "min_new_tokens": -1,
             },
         )

@@ -3,10 +3,11 @@ Faebot AI chatbot for twitch
 
 ### next steps
 - ~~make sure docker and wsl and everything are working~~
-- port the AI functionality from faediscord ✅
+- ~~port the AI functionality from faediscord ~~✅
+- ~~implement history trimming~~✅
 - add on-the-fly prompt editing
 - deploy to fly.io
-- implemtr history trimming
+- implement change params commands
 - twitch character limit is 500
 
 

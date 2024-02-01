@@ -30,8 +30,8 @@ class Conversation:
     chatlog: list = field(default_factory=list)  # dict[int, Message]
     conversants: list = field(default_factory=list)
     system_prompt: str = ""
-    frequency: int = 5
-    history: int = 10
+    frequency: int = 10
+    history: int = 5
     model: str = MODEL
 
 
@@ -62,7 +62,7 @@ class Faebot(commands.Bot):
                 channel=message.channel.name,
                 system_prompt=(f"You are an AI chatbot called faebot. \n"
                                 f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. You don't ask a lot of questions. \n"
-                                "You always make sure your messages are below the twitch character limit which is 500 characters.")
+                                "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions.")
             )
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"

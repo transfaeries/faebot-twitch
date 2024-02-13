@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
-INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "transfaeries,faebot_01").split(",")
+INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
 MODEL = os.getenv("MODEL", "meta/llama-2-13b-chat")
-ADMIN = os.getenv("ADMIN", "transfaeries").split(",")
+ADMIN = os.getenv("ADMIN", "").split(",")
 
 
 # set up logging
@@ -32,6 +32,7 @@ class Conversation:
     frequency: int = 10
     history: int = 5
     model: str = MODEL
+    silenced: bool = False
 
 
 class Faebot(commands.Bot):
@@ -78,16 +79,32 @@ class Faebot(commands.Bot):
             f"{message.author.name}: {message.content}"
         )
 
-        if self.conversations[message.channel.name].frequency < 1:
-            chance = 1
-        else:
-            chance = randrange(self.conversations[message.channel.name].frequency)
-        if "faebot" in message.content or chance == 0:
-            logging.info(f"rolled a {chance} generating!")
+        if self.choose_to_reply(self, message):
             return await self.generate_response(message)
 
+    def choose_to_reply(self, message) -> bool:
+        """determine whether faebot replies to a message or not"""
+
+        if self.conversations[message.channel.name].silenced:
+            return False
+
+        if "faebot" in message.content:
+            return True
+
+        if self.conversations[message.channel.name].frequency == 1:
+            return True
+
+        if self.conversations[message.channel.name].frequency < 1:
+            return False
+
         else:
-            logging.info(f"rolled a {chance}, not generating!")
+            chance = randrange(self.conversations[message.channel.name].frequency)
+            if chance == 0:
+                logging.info(f"rolled a {chance} generating!")
+                return True
+            else:
+                logging.info(f"rolled a {chance}, not generating!")
+                return False
 
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
@@ -101,7 +118,10 @@ class Faebot(commands.Bot):
             )
             self.conversations[message.channel.name].chatlog = self.conversations[
                 message.channel.name
-            ].chatlog[len(self.conversations[message.channel.name].chatlog) - self.conversations[message.channel.name].history :]
+            ].chatlog[
+                len(self.conversations[message.channel.name].chatlog)
+                - self.conversations[message.channel.name].history :
+            ]
 
         prompt = (
             "\n".join(self.conversations[message.channel.name].chatlog) + "\nfaebot:"
@@ -109,58 +129,66 @@ class Faebot(commands.Bot):
         logging.info(
             f"model: {self.conversations[message.channel.name].model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}"
         )
-        response = await self.generate(
-            model=self.conversations[message.channel.name].model,
-            prompt=prompt,
-            author=message.author.display_name,
-            system_prompt=self.conversations[message.channel.name].system_prompt,
-        )
-        logging.info(f"received response: {response}")
 
         try:
+            response = await self.generate(
+                model=self.conversations[message.channel.name].model,
+                prompt=prompt,
+                author=message.author.display_name,
+                system_prompt=self.conversations[message.channel.name].system_prompt,
+            )
+            logging.info(f"received response: {response}")
             await message.channel.send(response)
+
         except InvalidContent:
             logging.info(
                 "generated content exceeded 500 characters, trimming and posting."
             )
             response = response[0:499] + "–"
             await message.channel.send(response)
+
         except:
             logging.info("Unknown error has occured, please contact the administrator.")
-            response = "Oops, something strange has happened. Please let the transfaeries know!"
+            response = (
+                "Oops, something strange has happened. Please let the developer know!"
+            )
             await message.channel.send(response)
 
         self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
         return
 
     ## commands for everyone ##
+
     @commands.command()
     async def hello(self, ctx: commands.Context):
-        """say hello get said hello back"""
-        await ctx.send(f"Hello {ctx.author.name}!")
+        """display the help message"""
+        await ctx.reply(
+            f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+        )
 
     @commands.command()
     async def ping(self, ctx: commands.Context):
         """ping the bot"""
         message = ctx.message.content
         message_tokens = message.split(" ")
-        await ctx.send(f'pong {" ".join(message_tokens[1:])}')
+        await ctx.reply(f'pong {" ".join(message_tokens[1:])}')
 
     @commands.command()
     async def help(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
-            f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. If you'd like to add faebot to your channel message transfaeries . I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+            f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
         )
 
     @commands.command()
     async def mods(self, ctx: commands.Context):
         """display the mods command message"""
         await ctx.reply(
-            f"If you're a mod in a channel I'm in, you can edit how frequently I respond to messages with the 'fb;freq' command. Set it to 1 to have me always reply, set it to 0 to have me never reply. I'll still reply to messages with my name on them and commands"
+            f"Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
         )
 
     ## commands for mods ##
+
     @commands.command()
     async def freq(self, ctx: commands.Context):
         """check or change message frequency in this channel"""
@@ -184,6 +212,7 @@ class Faebot(commands.Bot):
         if not ctx.author.is_mod:
             return await ctx.send(f"sorry you need to be a mod to use that command")
         arguments = ctx.message.content.split(" ")
+
         if len(arguments) > 1:
             if str(arguments[1]).isdigit():
                 self.conversations[ctx.channel.name].history = int(arguments[1])
@@ -213,16 +242,17 @@ class Faebot(commands.Bot):
 
     @commands.command()
     async def clear(self, ctx: commands.Context):
-        """check or change the system prompt in the channel"""
+        """clear faebot's memory"""
         if not ctx.author.is_mod:
             return await ctx.send(f"sorry you need to be a mod to use that command")
         self.conversations[ctx.channel.name].chatlog = []
         return await ctx.reply("message history has been cleared. faebot has forgotten")
 
     ### commands for admins ###
+
     @commands.command()
     async def model(self, ctx: commands.Context):
-        """check or change the system prompt in the channel"""
+        """check or change the model used to generate in the channel"""
         if not ctx.author.name in ADMIN:
             return await ctx.send(f"sorry you need to be an admin to use that command")
         arguments = ctx.message.content.split(" ")

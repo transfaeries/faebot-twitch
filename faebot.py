@@ -5,6 +5,7 @@ import logging
 import replicate
 from random import randrange
 from dataclasses import dataclass, field
+from functools import wraps
 
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
@@ -79,22 +80,25 @@ class Faebot(commands.Bot):
             f"{message.author.name}: {message.content}"
         )
 
-        if self.choose_to_reply(self, message):
+        if self.choose_to_reply(message):
             return await self.generate_response(message)
 
     def choose_to_reply(self, message) -> bool:
         """determine whether faebot replies to a message or not"""
 
         if self.conversations[message.channel.name].silenced:
+            logging.info(f"faebot is silenced in channel {message.channel.name} faebot won't reply!")
             return False
 
         if "faebot" in message.content:
             return True
 
         if self.conversations[message.channel.name].frequency == 1:
+            logging.info(f"frequency set to {self.conversations[message.channel.name].frequency} in this channel generating on every message!")
             return True
 
         if self.conversations[message.channel.name].frequency < 1:
+            logging.info(f"frequency set to {self.conversations[message.channel.name].frequency}, that's fewer than one faebot will only reply to faer name!")
             return False
 
         else:
@@ -188,12 +192,20 @@ class Faebot(commands.Bot):
         )
 
     ## commands for mods ##
+        
+    def requires_mod(command: commands) -> commands:
+        @wraps(command)
+        async def mod_command(self, ctx: commands.Context):
+            if ctx.author.is_mod or ctx.author.name in ADMIN:
+                return await command(self, ctx)
+            return await ctx.send("you must be a mod or an admin to use this command")
+
+        return mod_command
 
     @commands.command()
+    @requires_mod
     async def freq(self, ctx: commands.Context):
         """check or change message frequency in this channel"""
-        if not ctx.author.is_mod:
-            return await ctx.send(f"sorry you need to be a mod to use that command")
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
             if str(arguments[1]).isdigit():
@@ -207,12 +219,11 @@ class Faebot(commands.Bot):
         )
 
     @commands.command()
+    @requires_mod
     async def hist(self, ctx: commands.Context):
         """check or change message history length in the channel"""
-        if not ctx.author.is_mod:
-            return await ctx.send(f"sorry you need to be a mod to use that command")
+        
         arguments = ctx.message.content.split(" ")
-
         if len(arguments) > 1:
             if str(arguments[1]).isdigit():
                 self.conversations[ctx.channel.name].history = int(arguments[1])
@@ -225,10 +236,10 @@ class Faebot(commands.Bot):
         )
 
     @commands.command()
+    @requires_mod
     async def prompt(self, ctx: commands.Context):
         """check or change the system prompt in the channel"""
-        if not ctx.author.is_mod:
-            return await ctx.send(f"sorry you need to be a mod to use that command")
+       
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
             self.conversations[ctx.channel.name].system_prompt = " ".join(arguments[1:])
@@ -241,10 +252,9 @@ class Faebot(commands.Bot):
         )
 
     @commands.command()
+    @requires_mod
     async def clear(self, ctx: commands.Context):
         """clear faebot's memory"""
-        if not ctx.author.is_mod:
-            return await ctx.send(f"sorry you need to be a mod to use that command")
         self.conversations[ctx.channel.name].chatlog = []
         return await ctx.reply("message history has been cleared. faebot has forgotten")
 

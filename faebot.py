@@ -1,5 +1,8 @@
+from types import coroutine
+from typing import Optional
 from twitchio import Message, InvalidContent
 from twitchio.ext import commands
+import twitchio
 import os
 import logging
 import replicate
@@ -41,13 +44,32 @@ class Faebot(commands.Bot):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
         super().__init__(
-            token=TWITCH_TOKEN, prefix="fb;", initial_channels=INITIAL_CHANNELS
+            token=TWITCH_TOKEN,
+            prefix=["fb;", "fae;"],
+            initial_channels=INITIAL_CHANNELS,
         )
+
+    async def event_command_error(self, context: commands.Context, error: Exception):
+        if isinstance(error, commands.CommandNotFound):
+            return
+
+        elif isinstance(error, commands.ArgumentParsingFailed):
+            await context.send(error.message)
+
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await context.send("You're missing an argument: " + error.name)
+
+        elif isinstance(error, TypeError):
+            await context.send("Type Error: " + error)
+
+        else:
+            logging.error(error.with_traceback)
 
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
+        logging.info(f"Joined channels {INITIAL_CHANNELS}")
 
     async def event_message(self, message):
         # Messages with echo set to True are messages sent by the bot...
@@ -72,7 +94,12 @@ class Faebot(commands.Bot):
             )
 
         ##command, execute command if appropriate otherwise return out
-        if message.content.startswith("!") or message.content.startswith("fb;"):
+        # TODO: change if statement to use prefixes directly
+        if (
+            message.content.startswith("!")
+            or message.content.startswith("fb;")
+            or message.content.startswith("fae;")
+        ):
             return await self.handle_commands(message)
 
         ## log message
@@ -87,18 +114,24 @@ class Faebot(commands.Bot):
         """determine whether faebot replies to a message or not"""
 
         if self.conversations[message.channel.name].silenced:
-            logging.info(f"faebot is silenced in channel {message.channel.name} faebot won't reply!")
+            logging.info(
+                f"faebot is silenced in channel {message.channel.name} faebot won't reply!"
+            )
             return False
 
         if "faebot" in message.content:
             return True
 
         if self.conversations[message.channel.name].frequency == 1:
-            logging.info(f"frequency set to {self.conversations[message.channel.name].frequency} in this channel generating on every message!")
+            logging.info(
+                f"frequency set to {self.conversations[message.channel.name].frequency} in this channel generating on every message!"
+            )
             return True
 
         if self.conversations[message.channel.name].frequency < 1:
-            logging.info(f"frequency set to {self.conversations[message.channel.name].frequency}, that's fewer than one faebot will only reply to faer name!")
+            logging.info(
+                f"frequency set to {self.conversations[message.channel.name].frequency}, that's fewer than one faebot will only reply to faer name!"
+            )
             return False
 
         else:
@@ -171,17 +204,17 @@ class Faebot(commands.Bot):
         )
 
     @commands.command()
-    async def ping(self, ctx: commands.Context):
-        """ping the bot"""
-        message = ctx.message.content
-        message_tokens = message.split(" ")
-        await ctx.reply(f'pong {" ".join(message_tokens[1:])}')
-
-    @commands.command()
     async def help(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
             f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+        )
+
+    @commands.command()
+    async def invite(self, ctx: commands.Context) -> coroutine:
+        """Invite Faebot to your channel"""
+        await ctx.reply(
+            "Thanks for the invitation, but you should ask the transfaeries first. Send faer a whisper!"
         )
 
     @commands.command()
@@ -191,8 +224,15 @@ class Faebot(commands.Bot):
             f"Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
         )
 
+    @commands.command()
+    async def ping(self, ctx: commands.Context):
+        """ping the bot"""
+        message = ctx.message.content
+        message_tokens = message.split(" ")
+        await ctx.reply(f'pong {" ".join(message_tokens[1:])}')
+
     ## commands for mods ##
-        
+
     def requires_mod(command: commands) -> commands:
         @wraps(command)
         async def mod_command(self, ctx: commands.Context):
@@ -201,6 +241,13 @@ class Faebot(commands.Bot):
             return await ctx.send("you must be a mod or an admin to use this command")
 
         return mod_command
+
+    @commands.command()
+    @requires_mod
+    async def clear(self, ctx: commands.Context):
+        """clear faebot's memory"""
+        self.conversations[ctx.channel.name].chatlog = []
+        return await ctx.reply("message history has been cleared. faebot has forgotten")
 
     @commands.command()
     @requires_mod
@@ -222,7 +269,7 @@ class Faebot(commands.Bot):
     @requires_mod
     async def hist(self, ctx: commands.Context):
         """check or change message history length in the channel"""
-        
+
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
             if str(arguments[1]).isdigit():
@@ -237,9 +284,16 @@ class Faebot(commands.Bot):
 
     @commands.command()
     @requires_mod
+    async def part(self, ctx: commands.Context):
+        """ask faebot to leave the channel"""
+        await ctx.reply("Oki, bye bye. *faebot has left the channel*")
+        return await self.part_channels([ctx.channel.name])
+
+    @commands.command()
+    @requires_mod
     async def prompt(self, ctx: commands.Context):
         """check or change the system prompt in the channel"""
-       
+
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
             self.conversations[ctx.channel.name].system_prompt = " ".join(arguments[1:])
@@ -253,12 +307,31 @@ class Faebot(commands.Bot):
 
     @commands.command()
     @requires_mod
-    async def clear(self, ctx: commands.Context):
-        """clear faebot's memory"""
-        self.conversations[ctx.channel.name].chatlog = []
-        return await ctx.reply("message history has been cleared. faebot has forgotten")
+    async def silence(self, ctx: commands.Context):
+        """ask faebot to be quiet"""
+        if self.conversations[ctx.channel.name].silenced:
+            reply = "Yay I can speak again!"
+        else:
+            reply = "oki, I'll be quiet. 🤐"
+        self.conversations[ctx.channel.name].silenced = not self.conversations[
+            ctx.channel.name
+        ].silenced
+        logging.info(
+            f"faebot silent status toggled to {self.conversations[ctx.channel.name].silenced}"
+        )
+        return await ctx.send(reply)
 
     ### commands for admins ###
+
+    @commands.command()
+    async def join(self, ctx: commands.Context, user: str | None) -> coroutine:
+        """invite faebot to join a channel"""
+        if not ctx.author.name in ADMIN:
+            return await ctx.send(f"sorry you need to be an admin to use that command")
+
+        await self.join_channels([user])
+        logging.info(f"Joined new channel: {user}")
+        return await ctx.reply(f"Joined new channel: {user}")
 
     @commands.command()
     async def model(self, ctx: commands.Context):

@@ -49,22 +49,6 @@ class Faebot(commands.Bot):
             initial_channels=INITIAL_CHANNELS,
         )
 
-    async def event_command_error(self, context: commands.Context, error: Exception):
-        if isinstance(error, commands.CommandNotFound):
-            return
-
-        elif isinstance(error, commands.ArgumentParsingFailed):
-            await context.send(error.message)
-
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await context.send("You're missing an argument: " + error.name)
-
-        elif isinstance(error, TypeError):
-            await context.send("Type Error: " + error)
-
-        else:
-            logging.error(error.with_traceback)
-
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...
         logging.info(f"Logged in as | {self.nick}")

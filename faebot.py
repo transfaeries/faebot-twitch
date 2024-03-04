@@ -6,6 +6,7 @@ import twitchio
 import os
 import logging
 import replicate
+import asyncio
 from random import randrange
 from dataclasses import dataclass, field
 from functools import wraps
@@ -92,7 +93,7 @@ class Faebot(commands.Bot):
         )
 
         if self.choose_to_reply(message):
-            return await self.generate_response(message)
+            return asyncio.create_task(self.generate_response(message))
 
     def choose_to_reply(self, message) -> bool:
         """determine whether faebot replies to a message or not"""
@@ -205,7 +206,7 @@ class Faebot(commands.Bot):
     async def mods(self, ctx: commands.Context):
         """display the mods command message"""
         await ctx.reply(
-            f"Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
+            "Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
         )
 
     @commands.command()
@@ -342,11 +343,11 @@ class Faebot(commands.Bot):
     ) -> str:
         """generates completions with the replicate api"""
 
-        output = replicate.run(
+        output = await replicate.async_run(
             model,
             input={
                 "debug": False,
-                "top_k": 50,
+                "top_k": 75,
                 "top_p": 1,
                 "prompt": prompt,
                 "temperature": 0.7,

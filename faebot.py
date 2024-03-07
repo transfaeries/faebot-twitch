@@ -240,14 +240,14 @@ class Faebot(commands.Bot):
     async def hello(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
-            f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
         )
 
     @commands.command()
     async def help(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
-            f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
         )
 
     @commands.command()
@@ -366,8 +366,8 @@ class Faebot(commands.Bot):
     @commands.command()
     async def join(self, ctx: commands.Context, user: str | None) -> coroutine:
         """invite faebot to join a channel"""
-        if not ctx.author.name in ADMIN:
-            return await ctx.send(f"sorry you need to be an admin to use that command")
+        if ctx.author.name not in ADMIN:
+            return await ctx.send("sorry you need to be an admin to use that command")
 
         await self.join_channels([user])
         logging.info(f"Joined new channel: {user}")
@@ -376,8 +376,8 @@ class Faebot(commands.Bot):
     @commands.command()
     async def model(self, ctx: commands.Context):
         """check or change the model used to generate in the channel"""
-        if not ctx.author.name in ADMIN:
-            return await ctx.send(f"sorry you need to be an admin to use that command")
+        if ctx.author.name not in ADMIN:
+            return await ctx.send("sorry you need to be an admin to use that command")
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
             self.conversations[ctx.channel.name].model = " ".join(arguments[1:])

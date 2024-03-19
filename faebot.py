@@ -15,7 +15,9 @@ from functools import wraps
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
-INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/llama-2-13b-chat,meta/llama-2-70b").split(",")
+INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/llama-2-13b-chat,meta/llama-2-70b").split(
+    ","
+)
 ADMIN = os.getenv("ADMIN", "").split(",")
 
 
@@ -32,7 +34,7 @@ class Conversation:
     """for storing conversations"""
 
     channel: str
-    current_model: str 
+    current_model: str
     chatlog: list = field(default_factory=list)  # dict[int, Message]
     conversants: list = field(default_factory=list)
     system_prompt: str = ""
@@ -75,7 +77,7 @@ class Faebot(commands.Bot):
                     f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing.  \n"
                     "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions."
                 ),
-                current_model=self.model_list[0]
+                current_model=self.model_list[0],
             )
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
@@ -136,6 +138,7 @@ class Faebot(commands.Bot):
             permalog.write(log_message)
 
     def jsonlog(self, log_message):
+        pass
         # with open("chatlog.json")
 
     async def generate_response(self, message):
@@ -168,7 +171,6 @@ class Faebot(commands.Bot):
             "top_k": randrange(1, 1024),
             "seed": randrange(1, 1024),
         }
-        # params = {"temperature":1.5, "top_p":0.5, "top_k": 232}
 
         logging.info(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
@@ -365,14 +367,16 @@ class Faebot(commands.Bot):
             f"faebot silent status toggled to {self.conversations[ctx.channel.name].silenced}"
         )
         return await ctx.send(reply)
-    
+
     @commands.command()
     @requires_mod
     async def switch(self, ctx: commands.Context):
         """switch faebot's model"""
-        
-        current_index = self.model_list.index(self.conversations[ctx.channel.name].current_model)
-        next_index = current_index+1
+
+        current_index = self.model_list.index(
+            self.conversations[ctx.channel.name].current_model
+        )
+        next_index = current_index + 1
         if next_index == len(self.model_list):
             next_index = 0
 
@@ -380,7 +384,9 @@ class Faebot(commands.Bot):
         logging.info(
             f"model changed to {next_index}: {self.conversations[ctx.channel.name].current_model}"
         )
-        return await ctx.send( f"model changed to {next_index}: {self.conversations[ctx.channel.name].current_model}")
+        return await ctx.send(
+            f"model changed to {next_index}: {self.conversations[ctx.channel.name].current_model}"
+        )
 
     ### commands for admins ###
 

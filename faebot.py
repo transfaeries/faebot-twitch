@@ -15,7 +15,7 @@ from functools import wraps
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
-MODEL = os.getenv("MODEL", "meta/llama-2-13b-chat")
+INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/llama-2-13b-chat,meta/llama-2-70b").split(",")
 ADMIN = os.getenv("ADMIN", "").split(",")
 
 
@@ -32,12 +32,12 @@ class Conversation:
     """for storing conversations"""
 
     channel: str
+    current_model: str 
     chatlog: list = field(default_factory=list)  # dict[int, Message]
     conversants: list = field(default_factory=list)
     system_prompt: str = ""
-    frequency: int = 10
+    frequency: int = 0
     history: int = 5
-    model: str = MODEL
     silenced: bool = False
 
 
@@ -45,6 +45,7 @@ class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
+        self.model_list = INITIAL_MODEL_LIST
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -71,9 +72,10 @@ class Faebot(commands.Bot):
                 channel=message.channel.name,
                 system_prompt=(
                     f"You are an AI chatbot called faebot. \n"
-                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. \n"
+                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. Streamer is currently playing {message.channel.category}  \n"
                     "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions."
                 ),
+                current_model=self.model_list[0]
             )
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
@@ -154,7 +156,7 @@ class Faebot(commands.Bot):
             "\n".join(self.conversations[message.channel.name].chatlog) + "\nfaebot:"
         )
         logging.info(
-            f"model: {self.conversations[message.channel.name].model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}"
+            f"model: {self.conversations[message.channel.name].current_model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}"
         )
 
         params = {
@@ -178,7 +180,7 @@ class Faebot(commands.Bot):
 
         try:
             response = await self.generate(
-                model=self.conversations[message.channel.name].model,
+                model=self.conversations[message.channel.name].current_model,
                 prompt=prompt,
                 author=message.author.display_name,
                 system_prompt=self.conversations[message.channel.name].system_prompt,
@@ -211,7 +213,7 @@ class Faebot(commands.Bot):
         self,
         prompt: str = "",
         author="",
-        model=MODEL,
+        model=INITIAL_MODEL_LIST[0],
         system_prompt="",
         params={"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666},
     ) -> str:
@@ -380,13 +382,13 @@ class Faebot(commands.Bot):
             return await ctx.send("sorry you need to be an admin to use that command")
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
-            self.conversations[ctx.channel.name].model = " ".join(arguments[1:])
+            self.conversations[ctx.channel.name].current_model = " ".join(arguments[1:])
             return await ctx.send(
-                f"changed model in this channel to {self.conversations[ctx.channel.name].model}"
+                f"changed model in this channel to {self.conversations[ctx.channel.name].current_model}"
             )
 
         return await ctx.send(
-            f"current model in this channel is {self.conversations[ctx.channel.name].model}"
+            f"current model in this channel is {self.conversations[ctx.channel.name].current_model}"
         )
 
 

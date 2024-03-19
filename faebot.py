@@ -72,7 +72,7 @@ class Faebot(commands.Bot):
                 channel=message.channel.name,
                 system_prompt=(
                     f"You are an AI chatbot called faebot. \n"
-                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. Streamer is currently playing {message.channel.category}  \n"
+                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing.  \n"
                     "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions."
                 ),
                 current_model=self.model_list[0]
@@ -134,6 +134,9 @@ class Faebot(commands.Bot):
     def permalog(self, log_message):
         with open("permalog.txt", "a") as permalog:
             permalog.write(log_message)
+
+    def jsonlog(self, log_message):
+        # with open("chatlog.json")
 
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
@@ -362,6 +365,22 @@ class Faebot(commands.Bot):
             f"faebot silent status toggled to {self.conversations[ctx.channel.name].silenced}"
         )
         return await ctx.send(reply)
+    
+    @commands.command()
+    @requires_mod
+    async def switch(self, ctx: commands.Context):
+        """switch faebot's model"""
+        
+        current_index = self.model_list.index(self.conversations[ctx.channel.name].current_model)
+        next_index = current_index+1
+        if next_index == len(self.model_list):
+            next_index = 0
+
+        self.conversations[ctx.channel.name].current_model = self.model_list[next_index]
+        logging.info(
+            f"model changed to {next_index}: {self.conversations[ctx.channel.name].current_model}"
+        )
+        return await ctx.send( f"model changed to {next_index}: {self.conversations[ctx.channel.name].current_model}")
 
     ### commands for admins ###
 

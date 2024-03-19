@@ -6,6 +6,8 @@ import twitchio
 import os
 import logging
 import replicate
+import asyncio
+import datetime
 from random import randrange
 from dataclasses import dataclass, field
 from functools import wraps
@@ -69,7 +71,7 @@ class Faebot(commands.Bot):
                 channel=message.channel.name,
                 system_prompt=(
                     f"You are an AI chatbot called faebot. \n"
-                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. You don't ask a lot of questions. \n"
+                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. \n"
                     "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions."
                 ),
             )
@@ -92,7 +94,7 @@ class Faebot(commands.Bot):
         )
 
         if self.choose_to_reply(message):
-            return await self.generate_response(message)
+            return asyncio.create_task(self.generate_response(message))
 
     def choose_to_reply(self, message) -> bool:
         """determine whether faebot replies to a message or not"""
@@ -127,6 +129,10 @@ class Faebot(commands.Bot):
                 logging.info(f"rolled a {chance}, not generating!")
                 return False
 
+    def permalog(self, log_message):
+        with open("permalog.txt", "a") as permalog:
+            permalog.write(log_message)
+
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
 
@@ -151,14 +157,37 @@ class Faebot(commands.Bot):
             f"model: {self.conversations[message.channel.name].model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}"
         )
 
+        params = {
+            "temperature": randrange(75, 150) / 100,
+            "top_p": randrange(5, 11) / 10,
+            "top_k": randrange(1, 1024),
+            "seed": randrange(1, 1024),
+        }
+        # params = {"temperature":1.5, "top_p":0.5, "top_k": 232}
+
+        logging.info(
+            f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
+        )
+        current_time = datetime.datetime.now()
+        self.permalog(
+            f"generating message in channel {message.channel.name}'s channel at {current_time}\n"
+        )
+        self.permalog(
+            f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
+        )
+
         try:
             response = await self.generate(
                 model=self.conversations[message.channel.name].model,
                 prompt=prompt,
                 author=message.author.display_name,
                 system_prompt=self.conversations[message.channel.name].system_prompt,
+                params=params,
             )
             logging.info(f"received response: {response}")
+            self.permalog(
+                f"generated message:{response}\n------------------------------------------------------------\n\n"
+            )
             await message.channel.send(response)
 
         except InvalidContent:
@@ -178,20 +207,47 @@ class Faebot(commands.Bot):
         self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
         return
 
+    async def generate(
+        self,
+        prompt: str = "",
+        author="",
+        model=MODEL,
+        system_prompt="",
+        params={"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666},
+    ) -> str:
+        """generates completions with the replicate api"""
+
+        output = await replicate.async_run(
+            model,
+            input={
+                "debug": False,
+                "top_k": params["top_k"],
+                "top_p": params["top_p"],
+                "prompt": prompt,
+                "temperature": params["temperature"],
+                "system_prompt": system_prompt,
+                "max_new_tokens": 150,
+                "min_new_tokens": -1,
+                "seed": params["seed"],
+            },
+        )
+        response = "".join(output)
+        return response
+
     ## commands for everyone ##
 
     @commands.command()
     async def hello(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
-            f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
         )
 
     @commands.command()
     async def help(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
-            f"Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
         )
 
     @commands.command()
@@ -205,7 +261,7 @@ class Faebot(commands.Bot):
     async def mods(self, ctx: commands.Context):
         """display the mods command message"""
         await ctx.reply(
-            f"Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
+            "Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
         )
 
     @commands.command()
@@ -310,8 +366,8 @@ class Faebot(commands.Bot):
     @commands.command()
     async def join(self, ctx: commands.Context, user: str | None) -> coroutine:
         """invite faebot to join a channel"""
-        if not ctx.author.name in ADMIN:
-            return await ctx.send(f"sorry you need to be an admin to use that command")
+        if ctx.author.name not in ADMIN:
+            return await ctx.send("sorry you need to be an admin to use that command")
 
         await self.join_channels([user])
         logging.info(f"Joined new channel: {user}")
@@ -320,8 +376,8 @@ class Faebot(commands.Bot):
     @commands.command()
     async def model(self, ctx: commands.Context):
         """check or change the model used to generate in the channel"""
-        if not ctx.author.name in ADMIN:
-            return await ctx.send(f"sorry you need to be an admin to use that command")
+        if ctx.author.name not in ADMIN:
+            return await ctx.send("sorry you need to be an admin to use that command")
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
             self.conversations[ctx.channel.name].model = " ".join(arguments[1:])
@@ -332,31 +388,6 @@ class Faebot(commands.Bot):
         return await ctx.send(
             f"current model in this channel is {self.conversations[ctx.channel.name].model}"
         )
-
-    async def generate(
-        self,
-        prompt: str = "",
-        author="",
-        model=MODEL,
-        system_prompt="",
-    ) -> str:
-        """generates completions with the replicate api"""
-
-        output = replicate.run(
-            model,
-            input={
-                "debug": False,
-                "top_k": 50,
-                "top_p": 1,
-                "prompt": prompt,
-                "temperature": 0.7,
-                "system_prompt": system_prompt,
-                "max_new_tokens": 150,
-                "min_new_tokens": -1,
-            },
-        )
-        response = "".join(output)
-        return response
 
 
 bot = Faebot()

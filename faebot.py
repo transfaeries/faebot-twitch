@@ -2,6 +2,7 @@ from types import coroutine
 from typing import Optional
 from twitchio import Message, InvalidContent
 from twitchio.ext import commands
+import json
 import twitchio
 import os
 import logging
@@ -60,7 +61,7 @@ class Faebot(commands.Bot):
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
 
-    async def event_message(self, message):
+    async def event_message(self, message: Message):
         # Messages with echo set to True are messages sent by the bot...
         # For now we just want to ignore them...
         if message.echo:
@@ -137,9 +138,17 @@ class Faebot(commands.Bot):
         with open("permalog.txt", "a") as permalog:
             permalog.write(log_message)
 
-    def jsonlog(self, log_message):
-        pass
-        # with open("chatlog.json")
+    def jsonlog(self, log_message: dict):
+        if os.path.exists("chatlog.json") and os.path.getsize("chatlog.json")>0:
+            with open("chatlog.json", "r") as jsonfile:
+                json_memory = json.load(jsonfile)
+        else:
+            json_memory = {"messages": []}
+        messages: list = json_memory["messages"]
+        messages.append(log_message)
+        json_memory["messages"] = messages
+        with open("chatlog.json", "w") as jsonlog:
+            json.dump(json_memory, jsonlog, indent=4)
 
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
@@ -171,11 +180,13 @@ class Faebot(commands.Bot):
             "top_k": randrange(1, 1024),
             "seed": randrange(1, 1024),
         }
+        current_time = datetime.datetime.now()
+        current_time = str(current_time.isoformat())
 
         logging.info(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
         )
-        current_time = datetime.datetime.now()
+
         self.permalog(
             f"generating message in channel {message.channel.name}'s channel at {current_time}\n"
         )
@@ -195,6 +206,7 @@ class Faebot(commands.Bot):
             self.permalog(
                 f"generated message:{response}\n------------------------------------------------------------\n\n"
             )
+
             await message.channel.send(response)
 
         except InvalidContent:
@@ -212,6 +224,14 @@ class Faebot(commands.Bot):
             await message.channel.send(response)
 
         self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
+        to_log = {
+            "timestamp": current_time,
+            "channel": str(message.channel.name),
+            "message_content": response,
+            "params": params,
+        }
+        self.jsonlog(to_log)
+
         return
 
     async def generate(

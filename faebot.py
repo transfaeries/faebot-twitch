@@ -1,5 +1,6 @@
 from types import coroutine
 from typing import Optional
+import uuid
 from twitchio import Message, InvalidContent
 from twitchio.ext import commands
 import json
@@ -20,13 +21,14 @@ INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/llama-2-13b-chat,meta/llama-2-70b"
     ","
 )
 ADMIN = os.getenv("ADMIN", "").split(",")
+PREFIX = ["fb;", "fae;"]
 
 
 # set up logging
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
     level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S",
+    datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
 
@@ -38,10 +40,24 @@ class Conversation:
     current_model: str
     chatlog: list = field(default_factory=list)  # dict[int, Message]
     conversants: list = field(default_factory=list)
-    system_prompt: str = ""
+    channel_prompt: str = ""
     frequency: int = 0
     history: int = 5
     silenced: bool = False
+
+
+@dataclass
+class FaebotMessage:
+    """for storing each message faebot generate/sends"""
+
+    message_id: int
+    channel: str
+    generating_model: str
+    system_prompt: str
+    generating_parameters: dict[str, int]
+    timestamp: datetime.datetime
+    message_content: str
+    rating: int
 
 
 class Faebot(commands.Bot):
@@ -51,7 +67,7 @@ class Faebot(commands.Bot):
         self.model_list = INITIAL_MODEL_LIST
         super().__init__(
             token=TWITCH_TOKEN,
-            prefix=["fb;", "fae;"],
+            prefix=PREFIX,
             initial_channels=INITIAL_CHANNELS,
         )
 
@@ -62,18 +78,21 @@ class Faebot(commands.Bot):
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
 
     async def event_message(self, message: Message):
-        # Messages with echo set to True are messages sent by the bot...
-        # For now we just want to ignore them...
+        # ignore messages sent by faebot faerself
         if message.echo:
             return
 
-        # Print the contents of our message to console...
-        logging.info(f"received message: {message.author}: {message.content}")
+        # Print new messages to the console
+        logging.info(
+            f"received message: {message.author}: {message.content} {message.id}"
+        )
         logging.info(f"channel object {message.channel.name}")
+
+        ### if the message is in a new channel we create a new conversation object for that channel
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
-                system_prompt=(
+                channel_prompt=(
                     f"You are an AI chatbot called faebot. \n"
                     f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing.  \n"
                     "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions."
@@ -81,16 +100,11 @@ class Faebot(commands.Bot):
                 current_model=self.model_list[0],
             )
             logging.info(
-                f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
+                f"added new conversation to Conversations: {self.conversations[message.channel.name].channel}"
             )
 
         ##command, execute command if appropriate otherwise return out
-        # TODO: change if statement to use prefixes directly
-        if (
-            message.content.startswith("!")
-            or message.content.startswith("fb;")
-            or message.content.startswith("fae;")
-        ):
+        if message.content.startswith("!") or message.content.startswith(tuple(PREFIX)):
             return await self.handle_commands(message)
 
         ## log message
@@ -134,25 +148,10 @@ class Faebot(commands.Bot):
                 logging.info(f"rolled a {chance}, not generating!")
                 return False
 
-    def permalog(self, log_message):
-        with open("permalog.txt", "a") as permalog:
-            permalog.write(log_message)
-
-    def jsonlog(self, log_message: dict):
-        if os.path.exists("chatlog.json") and os.path.getsize("chatlog.json")>0:
-            with open("chatlog.json", "r") as jsonfile:
-                json_memory = json.load(jsonfile)
-        else:
-            json_memory = {"messages": []}
-        messages: list = json_memory["messages"]
-        messages.append(log_message)
-        json_memory["messages"] = messages
-        with open("chatlog.json", "w") as jsonlog:
-            json.dump(json_memory, jsonlog, indent=4)
-
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
 
+        ##### Handle trimming conversation
         if (
             len(self.conversations[message.channel.name].chatlog)
             > self.conversations[message.channel.name].history
@@ -167,48 +166,37 @@ class Faebot(commands.Bot):
                 - self.conversations[message.channel.name].history :
             ]
 
+        ### Assemble prompt using chatlog
         prompt = (
             "\n".join(self.conversations[message.channel.name].chatlog) + "\nfaebot:"
         )
         logging.info(
-            f"model: {self.conversations[message.channel.name].current_model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}"
+            f"model: {self.conversations[message.channel.name].current_model}\nsystem_prompt: \n{self.conversations[message.channel.name].channel_prompt}\nprompt: \n{prompt}"
         )
 
+        #### Randomize parameters
         params = {
             "temperature": randrange(75, 150) / 100,
             "top_p": randrange(5, 11) / 10,
             "top_k": randrange(1, 1024),
             "seed": randrange(1, 1024),
         }
-        current_time = datetime.datetime.now()
-        current_time = str(current_time.isoformat())
 
-        logging.info(
-            f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
-        )
-
-        self.permalog(
-            f"generating message in channel {message.channel.name}'s channel at {current_time}\n"
-        )
-        self.permalog(
-            f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
-        )
-
+        ### try generating and sending message
         try:
             response = await self.generate(
                 model=self.conversations[message.channel.name].current_model,
                 prompt=prompt,
                 author=message.author.display_name,
-                system_prompt=self.conversations[message.channel.name].system_prompt,
+                system_prompt=self.conversations[message.channel.name].channel_prompt,
                 params=params,
             )
             logging.info(f"received response: {response}")
-            self.permalog(
-                f"generated message:{response}\n------------------------------------------------------------\n\n"
-            )
 
             await message.channel.send(response)
 
+        ### Twitch messages are limited to 500 characters, if posting fails trim the message
+        ## TODO just check if the message is too long and trim it don't wait for it to fail
         except InvalidContent:
             logging.info(
                 "generated content exceeded 500 characters, trimming and posting."
@@ -223,14 +211,20 @@ class Faebot(commands.Bot):
             )
             await message.channel.send(response)
 
+        ### append to chatlog and to messagelog
         self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
-        to_log = {
-            "timestamp": current_time,
-            "channel": str(message.channel.name),
-            "message_content": response,
-            "params": params,
-        }
-        self.jsonlog(to_log)
+
+        faebot_message = FaebotMessage(
+            message_id=uuid.uuid4().int,
+            channel=message.channel.name,
+            generating_model=self.conversations[message.channel.name].current_model,
+            system_prompt=self.conversations[message.channel.name].channel_prompt,
+            generating_parameters=params,
+            timestamp=datetime.datetime.now(),
+            message_content=response,
+            rating=50,
+        )
+        self.log_json(faebot_message)
 
         return
 
@@ -278,7 +272,7 @@ class Faebot(commands.Bot):
         )
 
     @commands.command()
-    async def invite(self, ctx: commands.Context) -> coroutine:
+    async def invite(self, ctx: commands.Context):
         """Invite Faebot to your channel"""
         await ctx.reply(
             "Thanks for the invitation, but you should ask the transfaeries first. Send faer a whisper!"
@@ -363,13 +357,15 @@ class Faebot(commands.Bot):
 
         arguments = ctx.message.content.split(" ")
         if len(arguments) > 1:
-            self.conversations[ctx.channel.name].system_prompt = " ".join(arguments[1:])
+            self.conversations[ctx.channel.name].channel_prompt = " ".join(
+                arguments[1:]
+            )
             return await ctx.send(
-                f"changed system prompt in this channel to {self.conversations[ctx.channel.name].system_prompt}"
+                f"changed system prompt in this channel to {self.conversations[ctx.channel.name].channel_prompt}"
             )
 
         return await ctx.send(
-            f"current system_prompt in this channel is {self.conversations[ctx.channel.name].system_prompt}"
+            f"current system_prompt in this channel is {self.conversations[ctx.channel.name].channel_prompt}"
         )
 
     @commands.command()
@@ -411,7 +407,7 @@ class Faebot(commands.Bot):
     ### commands for admins ###
 
     @commands.command()
-    async def join(self, ctx: commands.Context, user: str | None) -> coroutine:
+    async def join(self, ctx: commands.Context, user: str | None):
         """invite faebot to join a channel"""
         if ctx.author.name not in ADMIN:
             return await ctx.send("sorry you need to be an admin to use that command")

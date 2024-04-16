@@ -65,7 +65,7 @@ class Faebot(commands.Bot):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
         self.model_list = INITIAL_MODEL_LIST
-        self.faebot_messages:list[FaebotMessage] = []
+        self.faebot_messages: list[FaebotMessage] = []
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=PREFIX,
@@ -84,9 +84,7 @@ class Faebot(commands.Bot):
             return
 
         # Print new messages to the console
-        logging.info(
-            f"received message: {message.author}: {message.content}"
-        )
+        logging.info(f"received message: {message.author}: {message.content}")
         logging.info(f"channel object {message.channel.name}")
 
         ### if the message is in a new channel we create a new conversation object for that channel

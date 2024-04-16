@@ -65,6 +65,7 @@ class Faebot(commands.Bot):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
         self.model_list = INITIAL_MODEL_LIST
+        self.faebot_messages:list[FaebotMessage] = []
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=PREFIX,
@@ -84,7 +85,7 @@ class Faebot(commands.Bot):
 
         # Print new messages to the console
         logging.info(
-            f"received message: {message.author}: {message.content} {message.id}"
+            f"received message: {message.author}: {message.content}"
         )
         logging.info(f"channel object {message.channel.name}")
 
@@ -107,11 +108,12 @@ class Faebot(commands.Bot):
         if message.content.startswith("!") or message.content.startswith(tuple(PREFIX)):
             return await self.handle_commands(message)
 
-        ## log message
+        ## add message to chatlog
         self.conversations[message.channel.name].chatlog.append(
             f"{message.author.name}: {message.content}"
         )
 
+        ### if conditions are right, create an async tast that generates and posts a message
         if self.choose_to_reply(message):
             return asyncio.create_task(self.generate_response(message))
 
@@ -148,7 +150,7 @@ class Faebot(commands.Bot):
                 logging.info(f"rolled a {chance}, not generating!")
                 return False
 
-    async def generate_response(self, message):
+    async def generate_response(self, message: Message):
         """prompt the GenAI API for a message"""
 
         ##### Handle trimming conversation
@@ -224,7 +226,7 @@ class Faebot(commands.Bot):
             message_content=response,
             rating=50,
         )
-        self.log_json(faebot_message)
+        self.faebot_messages.append(faebot_message)
 
         return
 

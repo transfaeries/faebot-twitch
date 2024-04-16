@@ -15,6 +15,7 @@ twitchio = "^2.8.2"
 pdbpp = "^0.10.3"
 black = "^23.12.1"
 ipython = "^8.20.0"
+mypy = "^1.9.0"
 
 [build-system]
 requires = ["poetry-core"]

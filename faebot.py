@@ -1,10 +1,6 @@
-from types import coroutine
-from typing import Optional
 import uuid
 from twitchio import Message, InvalidContent
 from twitchio.ext import commands
-import json
-import twitchio
 import os
 import logging
 import replicate
@@ -21,7 +17,7 @@ INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/llama-2-13b-chat,meta/llama-2-70b"
     ","
 )
 ADMIN = os.getenv("ADMIN", "").split(",")
-PREFIX = ["fb;", "fae;"]
+PREFIX: list[str] = ["fb;", "fae;"]
 
 
 # set up logging

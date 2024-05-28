@@ -13,9 +13,7 @@ from functools import wraps
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
-INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/meta-llama-3-8b-instruct").split(
-    ","
-)
+INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/meta-llama-3-70b-instruct").split(",")
 ADMIN = os.getenv("ADMIN", "").split(",")
 PREFIX: list[str] = ["fb;", "fae;"]
 
@@ -42,26 +40,12 @@ class Conversation:
     silenced: bool = False
 
 
-@dataclass
-class FaebotMessage:
-    """for storing each message faebot generate/sends"""
-
-    message_id: int
-    channel: str
-    generating_model: str
-    system_prompt: str
-    generating_parameters: dict[str, int]
-    timestamp: datetime.datetime
-    message_content: str
-    rating: int
-
-
 class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
         self.model_list = INITIAL_MODEL_LIST
-        self.faebot_messages: list[FaebotMessage] = []
+        self.faebot_messages: dict[str, dict] = {}
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=PREFIX,
@@ -178,7 +162,7 @@ class Faebot(commands.Bot):
             "seed": randrange(1, 1024),
         }
 
-        ### try generating and sending message
+        # try generating and sending message
         try:
             response = await self.generate(
                 model=self.conversations[message.channel.name].current_model,
@@ -189,39 +173,39 @@ class Faebot(commands.Bot):
             )
             logging.info(f"received response: {response}")
 
-            await message.channel.send(response)
+            # Twitch messages are limited to 500 characters, if necessary trim the message
+            if len(response) > 500:
+                logging.info(
+                    "generated content exceeded 500 characters, trimming and posting."
+                )
+                response = response[0:499] + "–"
 
-        ### Twitch messages are limited to 500 characters, if posting fails trim the message
-        ## TODO just check if the message is too long and trim it don't wait for it to fail
-        except InvalidContent:
-            logging.info(
-                "generated content exceeded 500 characters, trimming and posting."
-            )
-            response = response[0:499] + "–"
+            # post message and trigger logging function
             await message.channel.send(response)
+            return await self.permalog(message, response, params)
 
         except:
             logging.info("Unknown error has occured, please contact the administrator.")
             response = (
                 "Oops, something strange has happened. Please let the developer know!"
             )
-            await message.channel.send(response)
+            return await message.channel.send(response)
 
+    ## TODO does this need to be an async function?
+    async def permalog(self, message: Message, response, params):
         ### append to chatlog and to messagelog
         self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
-
-        faebot_message = FaebotMessage(
-            message_id=uuid.uuid4().int,
-            channel=message.channel.name,
-            generating_model=self.conversations[message.channel.name].current_model,
-            system_prompt=self.conversations[message.channel.name].channel_prompt,
-            generating_parameters=params,
-            timestamp=datetime.datetime.now(),
-            message_content=response,
-            rating=50,
-        )
-        self.faebot_messages.append(faebot_message)
-
+        timestamp = datetime.datetime.now()
+        faebot_message = {
+            "channel": message.channel.name,
+            "generating_model": self.conversations[message.channel.name].current_model,
+            "system_prompt": self.conversations[message.channel.name].channel_prompt,
+            "generating_parameters": params,
+            "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "message_content": response,
+            "rating": 50,
+        }
+        self.faebot_messages[str(timestamp.timestamp())] = faebot_message
         return
 
     async def generate(

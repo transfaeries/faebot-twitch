@@ -45,7 +45,7 @@ class Faebot(commands.Bot):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
         self.model_list = INITIAL_MODEL_LIST
-        self.faebot_messages: dict[str, dict] = {}
+        self.faebot_messages: dict[int, dict] = {}
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=PREFIX,
@@ -205,7 +205,8 @@ class Faebot(commands.Bot):
             "message_content": response,
             "rating": 50,
         }
-        self.faebot_messages[str(timestamp.timestamp())] = faebot_message
+        self.faebot_messages[int(timestamp.timestamp())] = faebot_message
+        print(f"{self.faebot_messages=}")
         return
 
     async def generate(

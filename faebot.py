@@ -13,7 +13,7 @@ from functools import wraps
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
-INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/llama-2-13b-chat,meta/llama-2-70b").split(
+INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/meta-llama-3-8b-instruct").split(
     ","
 )
 ADMIN = os.getenv("ADMIN", "").split(",")

@@ -49,6 +49,8 @@ class Faebot(commands.Bot):
         self.model_list = INITIAL_MODEL_LIST
         self.faebot_messages: dict[int, dict] = {}
         self.log_filename = 'faebot_messages.json'
+        self.save_interval = 300  # Save every 5 minutes
+        self.last_save_time = datetime.datetime.now()
 
         #load faebot messages
         if os.path.exists(self.log_filename):
@@ -74,6 +76,9 @@ class Faebot(commands.Bot):
         # Print new messages to the console
         logging.info(f"received message: {message.author}: {message.content}")
         logging.info(f"channel object {message.channel.name}")
+
+        if (datetime.datetime.now() - self.last_save_time).total_seconds() >= self.save_interval:
+            self.save_data()
 
         ### if the message is in a new channel we create a new conversation object for that channel
         if message.channel.name not in self.conversations:
@@ -243,10 +248,17 @@ class Faebot(commands.Bot):
         response = "".join(output)
         return response
     
+    def save_data(self):
+        temp_filename = f"{self.log_filename}.temp"
+        with open(temp_filename, 'w') as jsonfile:
+            json.dump(self.faebot_messages, jsonfile)
+        os.replace(temp_filename, self.log_filename)
+        
+        self.last_save_time = datetime.now()
+    
     async def close(self):
         logging.info("shutting down, saving data to json-logfile")
-        with open(self.log_filename, 'w') as jsonfile: 
-            json.dump(self.faebot_messages, jsonfile)
+        self.save_data()
         return await super().close()
     
 

@@ -9,6 +9,7 @@ import datetime
 from random import randrange
 from dataclasses import dataclass, field
 from functools import wraps
+import json
 
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
@@ -38,6 +39,7 @@ class Conversation:
     frequency: int = 0
     history: int = 5
     silenced: bool = False
+    personality = 'default'
 
 
 class Faebot(commands.Bot):
@@ -46,6 +48,12 @@ class Faebot(commands.Bot):
         self.conversations: dict[str, Conversation] = {}
         self.model_list = INITIAL_MODEL_LIST
         self.faebot_messages: dict[int, dict] = {}
+        self.log_filename = 'faebot_messages.json'
+
+        #load faebot messages
+        if os.path.exists(self.log_filename):
+            with open(self.log_filename) as jsonfile: 
+                self.faebot_messages = json.load(jsonfile)
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=PREFIX,
@@ -199,14 +207,13 @@ class Faebot(commands.Bot):
         faebot_message = {
             "channel": message.channel.name,
             "generating_model": self.conversations[message.channel.name].current_model,
-            "system_prompt": self.conversations[message.channel.name].channel_prompt,
+            "context": self.conversations[message.channel.name].chatlog[-4:-1],
             "generating_parameters": params,
             "timestamp": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
             "message_content": response,
             "rating": 50,
         }
         self.faebot_messages[int(timestamp.timestamp())] = faebot_message
-        print(f"{self.faebot_messages=}")
         return
 
     async def generate(
@@ -235,6 +242,14 @@ class Faebot(commands.Bot):
         )
         response = "".join(output)
         return response
+    
+    async def close(self):
+        logging.info("shutting down, saving data to json-logfile")
+        with open(self.log_filename, 'w') as jsonfile: 
+            json.dump(self.faebot_messages, jsonfile)
+        return await super().close()
+    
+
 
     ## commands for everyone ##
 

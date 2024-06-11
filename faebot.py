@@ -5,7 +5,7 @@ import os
 import logging
 import replicate
 import asyncio
-import datetime
+from datetime import datetime
 from random import randrange
 from dataclasses import dataclass, field
 from functools import wraps
@@ -50,10 +50,11 @@ class Faebot(commands.Bot):
         self.faebot_messages: dict[int, dict] = {}
         self.log_filename = 'faebot_messages.json'
         self.save_interval = 300  # Save every 5 minutes
-        self.last_save_time = datetime.datetime.now()
+        self.last_save_time = datetime.now()
 
         #load faebot messages
         if os.path.exists(self.log_filename):
+            logging.info(f"found logfile{self.log_filename}. loading into memory")
             with open(self.log_filename) as jsonfile: 
                 self.faebot_messages = json.load(jsonfile)
         super().__init__(
@@ -77,7 +78,7 @@ class Faebot(commands.Bot):
         logging.info(f"received message: {message.author}: {message.content}")
         logging.info(f"channel object {message.channel.name}")
 
-        if (datetime.datetime.now() - self.last_save_time).total_seconds() >= self.save_interval:
+        if (datetime.now() - self.last_save_time).total_seconds() >= self.save_interval:
             self.save_data()
 
         ### if the message is in a new channel we create a new conversation object for that channel
@@ -208,7 +209,7 @@ class Faebot(commands.Bot):
     async def permalog(self, message: Message, response, params):
         ### append to chatlog and to messagelog
         self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
-        timestamp = datetime.datetime.now()
+        timestamp = datetime.now()
         faebot_message = {
             "channel": message.channel.name,
             "generating_model": self.conversations[message.channel.name].current_model,
@@ -251,13 +252,13 @@ class Faebot(commands.Bot):
     def save_data(self):
         temp_filename = f"{self.log_filename}.temp"
         with open(temp_filename, 'w') as jsonfile:
-            json.dump(self.faebot_messages, jsonfile)
+            json.dump(self.faebot_messages, jsonfile,indent=4)
         os.replace(temp_filename, self.log_filename)
         
         self.last_save_time = datetime.now()
     
     async def close(self):
-        logging.info("shutting down, saving data to json-logfile")
+        logging.info(f"shutting down, saving data to {self.log_filename}")
         self.save_data()
         return await super().close()
     

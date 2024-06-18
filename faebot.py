@@ -6,7 +6,7 @@ import logging
 import replicate
 import asyncio
 from datetime import datetime
-from random import randrange
+from random import randrange, sample
 from dataclasses import dataclass, field
 from functools import wraps
 import json
@@ -14,7 +14,7 @@ import json
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
-INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/meta-llama-3-70b-instruct").split(",")
+INITIAL_MODEL_LIST = os.getenv("MODEL", "meta/meta-llama-3-70b").split(",")
 ADMIN = os.getenv("ADMIN", "").split(",")
 PREFIX: list[str] = ["fb;", "fae;"]
 
@@ -39,7 +39,7 @@ class Conversation:
     frequency: int = 0
     history: int = 5
     silenced: bool = False
-    personality = 'default'
+    personality = "default"
 
 
 class Faebot(commands.Bot):
@@ -48,14 +48,14 @@ class Faebot(commands.Bot):
         self.conversations: dict[str, Conversation] = {}
         self.model_list = INITIAL_MODEL_LIST
         self.faebot_messages: dict[int, dict] = {}
-        self.log_filename = 'faebot_messages.json'
+        self.log_filename = "faebot_messages.json"
         self.save_interval = 300  # Save every 5 minutes
         self.last_save_time = datetime.now()
 
-        #load faebot messages
+        # load faebot messages
         if os.path.exists(self.log_filename):
             logging.info(f"found logfile{self.log_filename}. loading into memory")
-            with open(self.log_filename) as jsonfile: 
+            with open(self.log_filename) as jsonfile:
                 self.faebot_messages = json.load(jsonfile)
         super().__init__(
             token=TWITCH_TOKEN,
@@ -160,8 +160,20 @@ class Faebot(commands.Bot):
                 - self.conversations[message.channel.name].history :
             ]
 
-        ### Assemble prompt using chatlog
-        prompt = (
+        ### Assemble prompt using chatlog and log of faebot messages
+        # pick 3 faebot messages at random
+        picked_messages = sample(sorted(self.faebot_messages.items()), 3 if len(self.faebot_messages)>2 else len(self.faebot_messages) )
+        # import pdb;pdb.set_trace()
+        prompt_preamble = ""
+        for picked_message in picked_messages:
+            prompt_preamble = (
+                prompt_preamble+"\n"
+                + "\n".join(picked_message[1]["context"])
+                + "\n"
+                + "faebot: "+ picked_message[1]["message_content"]+ "\n"
+            )
+
+        prompt = prompt_preamble + (
             "\n".join(self.conversations[message.channel.name].chatlog) + "\nfaebot:"
         )
         logging.info(
@@ -170,7 +182,7 @@ class Faebot(commands.Bot):
 
         #### Randomize parameters
         params = {
-            "temperature": randrange(75, 150) / 100,
+            "temperature": randrange(50, 75) / 100,
             "top_p": randrange(5, 11) / 10,
             "top_k": randrange(1, 1024),
             "seed": randrange(1, 1024),
@@ -248,21 +260,19 @@ class Faebot(commands.Bot):
         )
         response = "".join(output)
         return response
-    
+
     def save_data(self):
         temp_filename = f"{self.log_filename}.temp"
-        with open(temp_filename, 'w') as jsonfile:
-            json.dump(self.faebot_messages, jsonfile,indent=4)
+        with open(temp_filename, "w") as jsonfile:
+            json.dump(self.faebot_messages, jsonfile, indent=4)
         os.replace(temp_filename, self.log_filename)
-        
+
         self.last_save_time = datetime.now()
-    
+
     async def close(self):
         logging.info(f"shutting down, saving data to {self.log_filename}")
         self.save_data()
         return await super().close()
-    
-
 
     ## commands for everyone ##
 

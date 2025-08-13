@@ -6,12 +6,12 @@ import twitchio
 import os
 import aiohttp
 import logging
-import replicate
 import asyncio
 import datetime
 from random import randrange
 from dataclasses import dataclass, field
 from functools import wraps
+import signal
 
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
@@ -46,14 +46,15 @@ class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
-        self.session: Optional[aiohttp.ClientSession] = (
-            None  # Add session for HTTP requests
-        )
+        self.session: Optional[
+            aiohttp.ClientSession
+        ] = None  # Add session for HTTP requests
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
             initial_channels=INITIAL_CHANNELS,
         )
+        signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(self.close()))
 
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...
@@ -265,6 +266,12 @@ class Faebot(commands.Bot):
         except Exception as e:
             logging.error(f"Error in OpenRouter API call: {e}")
             raise e  # Re-raise to be handled by the calling method
+
+    async def close(self):
+        """Closes the bot's resources gracefully"""
+        if self.session:
+            await self.session.close()
+        await super().close()
 
     ## commands for everyone ##
 

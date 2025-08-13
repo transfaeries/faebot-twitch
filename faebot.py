@@ -4,6 +4,7 @@ from twitchio import Message, InvalidContent
 from twitchio.ext import commands
 import twitchio
 import os
+import aiohttp
 import logging
 import replicate
 import asyncio
@@ -45,6 +46,9 @@ class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
+        self.session: Optional[aiohttp.ClientSession] = (
+            None  # Add session for HTTP requests
+        )
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -53,6 +57,7 @@ class Faebot(commands.Bot):
 
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...
+        self.session = aiohttp.ClientSession()  # Initialize HTTP session
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
@@ -215,24 +220,51 @@ class Faebot(commands.Bot):
         system_prompt="",
         params={"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666},
     ) -> str:
-        """generates completions with the replicate api"""
+        """generates completions with the OpenRouter API"""
 
-        output = await replicate.async_run(
-            model,
-            input={
-                "debug": False,
-                "top_k": params["top_k"],
-                "top_p": params["top_p"],
-                "prompt": prompt,
-                "temperature": params["temperature"],
-                "system_prompt": system_prompt,
-                "max_new_tokens": 150,
-                "min_new_tokens": -1,
-                "seed": params["seed"],
-            },
-        )
-        response = "".join(output)
-        return response
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+
+        # Create a proper message structure for OpenRouter
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            async with self.session.post(
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
+                    "HTTP-Referer": os.getenv(
+                        "SITE_URL", "https://github.com/transfaeries/faebot-twitch"
+                    ),
+                    "X-Title": "Faebot Twitch",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": params.get("temperature", 0.7),
+                    "max_tokens": 150,
+                    "top_p": params.get("top_p", 1.0),
+                },
+            ) as response:
+                result = await response.json()
+
+                # Extract the assistant's message content
+                if "choices" in result and len(result["choices"]) > 0:
+                    reply = result["choices"][0]["message"]["content"]
+                    return str(reply)
+                else:
+                    logging.error(
+                        f"Unexpected response format from OpenRouter: {result}"
+                    )
+                    return "I couldn't generate a response. Please try again."
+
+        except Exception as e:
+            logging.error(f"Error in OpenRouter API call: {e}")
+            raise e  # Re-raise to be handled by the calling method
 
     ## commands for everyone ##
 

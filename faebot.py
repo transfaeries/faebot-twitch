@@ -70,14 +70,19 @@ class Faebot(commands.Bot):
             return
 
         # Print the contents of our message to console...
+        channel_info = await self.fetch_channel(message.channel.name)
+        stream_title = channel_info.title if channel_info else "Unknown"
+        game_name = channel_info.game_name if channel_info else "Unknown"
         logging.info(f"received message: {message.author}: {message.content}")
         logging.info(f"channel object {message.channel.name}")
+        logging.info(f"channel title: {stream_title}")
+        logging.info(f"channel category: {game_name}")
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
                 system_prompt=(
                     f"You are an AI chatbot called faebot. \n"
-                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. The streamer is playing {message.channel.category} and the title is {message.channel.title}\n"
+                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. The streamer is playing {game_name} and the title is {stream_title}\n"
                     "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions."
                 ),
             )

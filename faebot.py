@@ -80,6 +80,7 @@ class Faebot(commands.Bot):
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
+                ## todo this could change per message
                 system_prompt=(
                     f"You are an AI chatbot called faebot. \n"
                     f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. The streamer is playing {game_name} and the title is {stream_title}\n"

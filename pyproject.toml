@@ -1,14 +1,21 @@
 [tool.poetry]
 name = "faebot-twitch"
-version = "0.1.0"
-description = "Faebot AI Chatbot for twitch"
+version = "0.2.0"
+description = "Faebot AI Chatbot for twitch with voice integration"
 authors = ["transfaeries"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.11"
 twitchio = "^2.8.2"
-
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.32.0"}
+websockets = "^14.0"
+numpy = "^2.0.0"
+aiohttp = "^3.11.0"
+jinja2 = "^3.1.0"
+faster-whisper = "^1.0.0"
+torch = "^2.0.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.12.1"

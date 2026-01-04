@@ -125,6 +125,11 @@ class AudioCapture {
     }
 
     connectWebSocket() {
+    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+        console.log('WebSocket already connected');
+        return;
+    }
+    
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/audio`;
     

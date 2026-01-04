@@ -4,29 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Faebot Dashboard</title>
-    <style>
-        :root {
-            --primary: #87CEFA;
-            --secondary: #CCCCCC;
-            --dark-bg: #1a1a2e;
-            --darker-bg: #12121c;
-        }
-
-        body {
-            font-family: sans-serif;
-            background: var(--dark-bg);
-            color: var(--secondary);
-            margin: 0;
-            padding: 2rem;
-        }
-
-        h1 {
-            color: var(--primary);
-        }
-    </style>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/dashboard.js" defer></script>
 </head>
 <body>
-    <h1>Faebot Dashboard</h1>
-    <p>Hello from the template!</p>
+    <div class="container">
+        <header>
+            <h1>✨ Faebot Dashboard</h1>
+            <span id="connectionStatus" class="status-badge disconnected">Disconnected</span>
+        </header>
+
+        <div class="card">
+            <h2>🎤 Audio Capture</h2>
+            <div class="audio-controls">
+                <button id="startBtn" class="btn btn-primary">Start Listening</button>
+                <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+            </div>
+            <div id="audioStatus" class="audio-status">
+                <span class="indicator"></span>
+                <span class="label">Not recording</span>
+            </div>
+            <div class="visualizer">
+                <canvas id="visualizer"></canvas>
+            </div>
+            <div class="stats">
+                <div class="stat">
+                    <div id="chunksSent" class="stat-value">0</div>
+                    <div class="stat-label">Chunks</div>
+                </div>
+                <div class="stat">
+                    <div id="duration" class="stat-value">0:00</div>
+                    <div class="stat-label">Duration</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📝 Transcriptions</h2>
+            <div id="transcriptionLog" class="log">
+                <div class="log-empty">Transcriptions will appear here...</div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

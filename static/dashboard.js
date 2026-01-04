@@ -20,6 +20,8 @@ class AudioCapture {
         
         this.startBtn.addEventListener('click', () => this.start());
         this.stopBtn.addEventListener('click', () => this.stop());
+
+        this.websocket = null;
     }
     
     async start() {
@@ -34,6 +36,7 @@ class AudioCapture {
             
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
             source.connect(this.analyser);
+            this.connectWebSocket();
             
             this.isRecording = true;
             this.startBtn.disabled = true;
@@ -68,6 +71,11 @@ class AudioCapture {
         if (this.durationInterval) {
             clearInterval(this.durationInterval);
             this.durationInterval = null;
+        }
+
+        if (this.websocket) {
+            this.websocket.close();
+            this.websocket = null;
         }
         
         this.isRecording = false;
@@ -115,6 +123,31 @@ class AudioCapture {
             x += barWidth + 1;
         }
     }
+
+    connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/audio`;
+    
+    this.websocket = new WebSocket(wsUrl);
+    
+    this.websocket.onopen = () => {
+        console.log('WebSocket connected');
+        document.getElementById('connectionStatus').textContent = 'Connected';
+        document.getElementById('connectionStatus').classList.remove('disconnected');
+        document.getElementById('connectionStatus').classList.add('connected');
+    };
+    
+    this.websocket.onclose = () => {
+        console.log('WebSocket disconnected');
+        document.getElementById('connectionStatus').textContent = 'Disconnected';
+        document.getElementById('connectionStatus').classList.remove('connected');
+        document.getElementById('connectionStatus').classList.add('disconnected');
+    };
+    
+    this.websocket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
+}
 }
 
 document.addEventListener('DOMContentLoaded', () => {

@@ -61,7 +61,25 @@ class Faebot(commands.Bot):
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...
         self.session = aiohttp.ClientSession()  # Initialize HTTP session
-        self.emotes=[ "transf23AYAYA", "transf23Plurallove", "transf23Petblythe", "transf23GQPride", "transf23Smart", "transf23Flutter", "transf23Pride", "transf23Smirk", "transf23Faebothi", "transf23Gentle", "transf23Petminou", "transf23Bark", "transf23Petfaebot", "transf23Botlove", "transf23Angy", "transf23Petaisling", "transf23Petember"]
+        self.emotes = [
+            "transf23AYAYA",
+            "transf23Plurallove",
+            "transf23Petblythe",
+            "transf23GQPride",
+            "transf23Smart",
+            "transf23Flutter",
+            "transf23Pride",
+            "transf23Smirk",
+            "transf23Faebothi",
+            "transf23Gentle",
+            "transf23Petminou",
+            "transf23Bark",
+            "transf23Petfaebot",
+            "transf23Botlove",
+            "transf23Angy",
+            "transf23Petaisling",
+            "transf23Petember",
+        ]
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
@@ -72,7 +90,7 @@ class Faebot(commands.Bot):
         if message.echo:
             return
 
-          # Print the contents of our message to console...
+        # Print the contents of our message to console...
         channel_info = await self.fetch_channel(message.channel.name)
         stream_title = channel_info.title if channel_info else "Unknown"
         game_name = channel_info.game_name if channel_info else "Unknown"
@@ -326,19 +344,29 @@ class Faebot(commands.Bot):
     async def alias(self, ctx: commands.Context):
         """set or check your preferred alias"""
         arguments = ctx.message.content.split(" ")
-        username = ctx.author.name
+        username = ctx.message.author.name
 
         if len(arguments) > 1:
             # Set the alias
             new_alias = " ".join(arguments[1:])
             self.aliases[username] = new_alias
-            return await ctx.reply(f"Got it! From now on I'll think of you as {new_alias}")
+            reply = f"Got it! From now on I'll think of you as {new_alias}"
+            ## log users request and faebot's response so it shows up in chatlog
+            self.conversations[ctx.channel.name].chatlog.append(
+                f"{username}: fae;alias {new_alias}"
+            )
+            self.conversations[ctx.channel.name].chatlog.append(f"faebot: {reply}")
+            return await ctx.reply(reply)
 
         # Check current alias
         if username in self.aliases:
-            return await ctx.reply(f"I currently know you as {self.aliases[username]}, should I call you something else?")
+            return await ctx.reply(
+                f"I currently know you as {self.aliases[username]}, should I call you something else?"
+            )
         else:
-            return await ctx.reply(f"You haven't given me a different name to use. Use 'fae;alias <name>' to set one!")
+            return await ctx.reply(
+                f"You haven't given me a different name to use. Use 'fae;alias <name>' to set one!"
+            )
 
     ## commands for mods ##
 

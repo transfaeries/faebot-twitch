@@ -16,7 +16,7 @@ import signal
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
-MODEL = os.getenv("MODEL", "meta/llama-2-13b-chat")
+MODEL = os.getenv("MODEL", "google/gemini-2.5-flash")
 ADMIN = os.getenv("ADMIN", "").split(",")
 
 
@@ -50,6 +50,7 @@ class Faebot(commands.Bot):
         self.session: Optional[
             aiohttp.ClientSession
         ] = None  # Add session for HTTP requests
+        self.emotes = list()  # Store emotes for each channel
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -60,6 +61,7 @@ class Faebot(commands.Bot):
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...
         self.session = aiohttp.ClientSession()  # Initialize HTTP session
+        self.emotes=[ "transf23AYAYA", "transf23Plurallove", "transf23Petblythe", "transf23GQPride", "transf23Smart", "transf23Flutter", "transf23Pride", "transf23Smirk", "transf23Faebothi", "transf23Gentle", "transf23Petminou", "transf23Bark", "transf23Petfaebot", "transf23Botlove", "transf23Angy", "transf23Petaisling", "transf23Petember"]
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
@@ -70,16 +72,23 @@ class Faebot(commands.Bot):
         if message.echo:
             return
 
-        # Print the contents of our message to console...
+          # Print the contents of our message to console...
+        channel_info = await self.fetch_channel(message.channel.name)
+        stream_title = channel_info.title if channel_info else "Unknown"
+        game_name = channel_info.game_name if channel_info else "Unknown"
         logging.info(f"received message: {message.author}: {message.content}")
         logging.info(f"channel object {message.channel.name}")
+        logging.info(f"channel title: {stream_title}")
+        logging.info(f"channel category: {game_name}")
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
+                ## todo this could change per message
                 system_prompt=(
-                    f"You are an AI chatbot called faebot. \n"
-                    f"You are hanging out in {message.channel.name}'s chat on twitch where you enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. \n"
-                    "You always make sure your messages are below the twitch character limit which is 500 characters. You prioritize replying to the last message and you never ask followup questions."
+                    f"I'm an AI chatbot called faebot. \n"
+                    f"I'm hanging out in {message.channel.name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. The streamer is playing {game_name} and the title is {stream_title}\n"
+                    f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes}, my favourite is transf23Botlove since it's a picture of me! \n"
+                    "I always make sure my messages are below the twitch character limit which is 500 characters. I prioritize replying to the last message and I never ask followup questions."
                 ),
             )
             logging.info(

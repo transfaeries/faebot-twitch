@@ -24,11 +24,12 @@ logging.basicConfig(
 async def home(request: Request):
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
+
 @app.websocket("/ws/audio")
 async def audio_websocket(websocket: WebSocket):
     await websocket.accept()
     logging.info("Audio WebSocket connected")
-    
+
     try:
         while True:
             data = await websocket.receive_bytes()

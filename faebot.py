@@ -46,6 +46,7 @@ class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
+        self.aliases: dict[str, str] = {}  # Store user aliases (username -> alias)
         self.session: Optional[
             aiohttp.ClientSession
         ] = None  # Add session for HTTP requests
@@ -95,8 +96,10 @@ class Faebot(commands.Bot):
             return await self.handle_commands(message)
 
         ## log message
+        # Use alias if available, otherwise use regular username
+        display_name = self.aliases.get(message.author.name, message.author.name)
         self.conversations[message.channel.name].chatlog.append(
-            f"{message.author.name}: {message.content}"
+            f"{display_name}: {message.content}"
         )
 
         if self.choose_to_reply(message):
@@ -309,6 +312,24 @@ class Faebot(commands.Bot):
         message = ctx.message.content
         message_tokens = message.split(" ")
         await ctx.reply(f'pong {" ".join(message_tokens[1:])}')
+
+    @commands.command()
+    async def alias(self, ctx: commands.Context):
+        """set or check your preferred alias"""
+        arguments = ctx.message.content.split(" ")
+        username = ctx.author.name
+
+        if len(arguments) > 1:
+            # Set the alias
+            new_alias = " ".join(arguments[1:])
+            self.aliases[username] = new_alias
+            return await ctx.reply(f"Got it! From now on I'll think of you as {new_alias}")
+
+        # Check current alias
+        if username in self.aliases:
+            return await ctx.reply(f"I currently know you as {self.aliases[username]}, should I call you something else?")
+        else:
+            return await ctx.reply(f"You haven't given me a different name to use. Use 'fae;alias <name>' to set one!")
 
     ## commands for mods ##
 

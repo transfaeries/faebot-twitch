@@ -7,15 +7,12 @@ class AudioCapture {
         this.stopBtn = document.getElementById('stopBtn');
         this.statusEl = document.getElementById('audioStatus');
         this.canvas = document.getElementById('visualizer');
-        this.durationEl = document.getElementById('duration');
-        this.chunksSentEl = document.getElementById('chunksSent');
+        this.sessionStartEl = document.getElementById('sessionStart');
         
         this.audioContext = null;
         this.analyser = null;
         this.mediaStream = null;
         this.isRecording = false;
-        this.startTime = null;
-        this.durationInterval = null;
         this.canvasCtx = this.canvas.getContext('2d');
         this.animationId = null;
         
@@ -55,9 +52,6 @@ class AudioCapture {
                         int16Array[i] = Math.max(-32768, Math.min(32767, float32Array[i] * 32768));
                     }
                     this.websocket.send(int16Array.buffer);
-                    
-                    const chunks = parseInt(this.chunksSentEl.textContent) + 1;
-                    this.chunksSentEl.textContent = chunks;
                 }
             };
 
@@ -70,8 +64,9 @@ class AudioCapture {
             this.statusEl.classList.add('recording');
             this.statusEl.querySelector('.label').textContent = 'Recording...';
             
-            this.startTime = Date.now();
-            this.durationInterval = setInterval(() => this.updateDuration(), 1000);
+            const now = new Date();
+            this.sessionStartEl.textContent = `Listening since ${now.toLocaleTimeString()}`;
+            
             this.drawVisualizer();
             
             console.log('Audio capture started, sample rate:', this.audioContext.sampleRate);
@@ -94,10 +89,6 @@ class AudioCapture {
             cancelAnimationFrame(this.animationId);
             this.animationId = null;
         }
-        if (this.durationInterval) {
-            clearInterval(this.durationInterval);
-            this.durationInterval = null;
-        }
 
         if (this.websocket) {
             this.websocket.close();
@@ -109,6 +100,7 @@ class AudioCapture {
         this.stopBtn.disabled = true;
         this.statusEl.classList.remove('recording');
         this.statusEl.querySelector('.label').textContent = 'Not recording';
+        this.sessionStartEl.textContent = 'Not listening';
         
         // Clear canvas
         this.canvasCtx.fillStyle = '#252540';
@@ -121,13 +113,6 @@ class AudioCapture {
         
         console.log('Audio capture stopped');
 
-    }
-    
-    updateDuration() {
-        const elapsed = Math.floor((Date.now() - this.startTime) / 1000);
-        const minutes = Math.floor(elapsed / 60);
-        const seconds = elapsed % 60;
-        this.durationEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
     }
     
     drawVisualizer() {
@@ -157,34 +142,34 @@ class AudioCapture {
     }
 
     connectWebSocket() {
-    if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-        console.log('WebSocket already connected');
-        return;
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            console.log('WebSocket already connected');
+            return;
+        }
+        
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/audio`;
+        
+        this.websocket = new WebSocket(wsUrl);
+        
+        this.websocket.onopen = () => {
+            console.log('WebSocket connected');
+            document.getElementById('connectionStatus').textContent = 'Connected';
+            document.getElementById('connectionStatus').classList.remove('disconnected');
+            document.getElementById('connectionStatus').classList.add('connected');
+        };
+        
+        this.websocket.onclose = () => {
+            console.log('WebSocket disconnected');
+            document.getElementById('connectionStatus').textContent = 'Disconnected';
+            document.getElementById('connectionStatus').classList.remove('connected');
+            document.getElementById('connectionStatus').classList.add('disconnected');
+        };
+        
+        this.websocket.onerror = (error) => {
+            console.error('WebSocket error:', error);
+        };
     }
-    
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/audio`;
-    
-    this.websocket = new WebSocket(wsUrl);
-    
-    this.websocket.onopen = () => {
-        console.log('WebSocket connected');
-        document.getElementById('connectionStatus').textContent = 'Connected';
-        document.getElementById('connectionStatus').classList.remove('disconnected');
-        document.getElementById('connectionStatus').classList.add('connected');
-    };
-    
-    this.websocket.onclose = () => {
-        console.log('WebSocket disconnected');
-        document.getElementById('connectionStatus').textContent = 'Disconnected';
-        document.getElementById('connectionStatus').classList.remove('connected');
-        document.getElementById('connectionStatus').classList.add('disconnected');
-    };
-    
-    this.websocket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-    };
-}
 }
 
 document.addEventListener('DOMContentLoaded', () => {

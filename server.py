@@ -33,7 +33,7 @@ async def audio_websocket(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_bytes()
-            logging.info(f"Received audio chunk: {len(data)} bytes")
+            logging.debug(f"Received audio chunk: {len(data)} bytes")
     except Exception as e:
         logging.info(f"WebSocket disconnected: {e}")
 

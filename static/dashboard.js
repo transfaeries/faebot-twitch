@@ -8,6 +8,7 @@ class AudioCapture {
         this.statusEl = document.getElementById('audioStatus');
         this.canvas = document.getElementById('visualizer');
         this.durationEl = document.getElementById('duration');
+        this.chunksSentEl = document.getElementById('chunksSent');
         
         this.audioContext = null;
         this.analyser = null;
@@ -22,6 +23,7 @@ class AudioCapture {
         this.stopBtn.addEventListener('click', () => this.stop());
 
         this.websocket = null;
+        this.workletNode = null;
     }
     
     async start() {
@@ -34,9 +36,33 @@ class AudioCapture {
             this.analyser = this.audioContext.createAnalyser();
             this.analyser.fftSize = 256;
             
+            // Create MediaStream source
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
             source.connect(this.analyser);
             this.connectWebSocket();
+
+            // Setup AudioWorklet for processing audio data
+            await this.audioContext.audioWorklet.addModule('/static/audio-processor.js');
+            this.workletNode = new AudioWorkletNode(this.audioContext, 'audio-processor');
+            
+            //the worklet sends us Float32 samples (range -1 to 1), and we convert them to Int16 (range -32768 to 32767) because that's what Whisper expects. 
+            // We then send the raw bytes over the WebSocket.
+            this.workletNode.port.onmessage = (event) => {
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    const float32Array = event.data;
+                    const int16Array = new Int16Array(float32Array.length);
+                    for (let i = 0; i < float32Array.length; i++) {
+                        int16Array[i] = Math.max(-32768, Math.min(32767, float32Array[i] * 32768));
+                    }
+                    this.websocket.send(int16Array.buffer);
+                    
+                    const chunks = parseInt(this.chunksSentEl.textContent) + 1;
+                    this.chunksSentEl.textContent = chunks;
+                }
+            };
+
+            source.connect(this.workletNode);
+
             
             this.isRecording = true;
             this.startBtn.disabled = true;
@@ -87,8 +113,14 @@ class AudioCapture {
         // Clear canvas
         this.canvasCtx.fillStyle = '#252540';
         this.canvasCtx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+        if (this.workletNode) {
+            this.workletNode.disconnect();
+            this.workletNode = null;
+        }
         
         console.log('Audio capture stopped');
+
     }
     
     updateDuration() {

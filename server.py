@@ -3,6 +3,8 @@ from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+
+import wave
 import logging
 import uvicorn
 
@@ -30,10 +32,25 @@ async def audio_websocket(websocket: WebSocket):
     await websocket.accept()
     logging.info("Audio WebSocket connected")
 
+    audio_buffer = bytearray()
+    sample_rate = 16000
+
     try:
         while True:
             data = await websocket.receive_bytes()
-            logging.debug(f"Received audio chunk: {len(data)} bytes")
+            audio_buffer.extend(data)
+
+            # Save a test file every ~5 seconds of audio (16000 samples/sec * 2 bytes * 5 sec)
+            if len(audio_buffer) >= sample_rate * 2 * 5:
+                filename = f"test_audio_{datetime.now().strftime('%H%M%S')}.wav"
+                with wave.open(filename, "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)  # 2 bytes for int16
+                    wav_file.setframerate(sample_rate)
+                    wav_file.writeframes(audio_buffer)
+                logging.info(f"Saved test audio: {filename}")
+                audio_buffer.clear()
+
     except Exception as e:
         logging.info(f"WebSocket disconnected: {e}")
 

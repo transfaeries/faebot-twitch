@@ -20,6 +20,7 @@ torch = "^2.0.0"
 [tool.poetry.group.dev.dependencies]
 black = "^23.12.1"
 ipython = "^8.20.0"
+flake8 = "^7.3.0"
 
 [build-system]
 requires = ["poetry-core"]

@@ -11,7 +11,7 @@ import uvicorn
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
+    level=logging.DEBUG,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 # Create FastAPI app
@@ -40,7 +40,7 @@ async def home(request: Request) -> HTMLResponse:
 async def audio_websocket(websocket: WebSocket) -> None:
     """WebSocket endpoint for receiving audio data and performing VAD."""
     try:
-        logging.info("WebSocket handler entered")
+        logging.debug("WebSocket handler entered")
         await websocket.accept()
         logging.info("Audio WebSocket connected")
 
@@ -76,6 +76,9 @@ async def audio_websocket(websocket: WebSocket) -> None:
                     text = " ".join(segment.text for segment in segments).strip()
                     if text:
                         logging.info(f"Transcription [{info.language}]: {text}")
+                        logging.debug(f"Sending to websocket: {text}")
+                        await websocket.send_text(text)
+                        logging.debug("Sent successfully")
 
                 audio_buffer = audio_buffer[bytes_per_chunk:]
 

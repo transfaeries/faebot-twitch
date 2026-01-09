@@ -155,7 +155,7 @@ class AudioCapture {
         this.websocket.onopen = () => {
             console.log('WebSocket connected');
             document.getElementById('connectionStatus').textContent = 'Connected';
-            document.getElementById('connectionStatus').classList.remove('disconnected');
+            document.getElementById('connectionStatus').classList.remove('disconnected');   
             document.getElementById('connectionStatus').classList.add('connected');
         };
         
@@ -168,6 +168,24 @@ class AudioCapture {
         
         this.websocket.onerror = (error) => {
             console.error('WebSocket error:', error);
+        };
+
+        this.websocket.onmessage = (event) => {
+            const text = event.data;
+            console.log('Transcription:', text);
+            
+            const log = document.getElementById('transcriptionLog');
+            const empty = log.querySelector('.log-empty');
+            if (empty) empty.remove();
+            
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `
+                <div class="time">${new Date().toLocaleTimeString()}</div>
+                <div class="text">${text}</div>
+            `;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
         };
     }
 }

@@ -241,7 +241,9 @@ class Faebot(commands.Bot):
             await message.channel.send(response)
 
         except Exception as e:
-            logging.info(f"Unknown error has occured, please contact the administrator. Error: {e}")
+            logging.info(
+                f"Unknown error has occured, please contact the administrator. Error: {e}"
+            )
             response = (
                 "Oops, something strange has happened. Please let the developer know!"
             )

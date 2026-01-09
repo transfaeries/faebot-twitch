@@ -100,15 +100,7 @@ class Faebot(commands.Bot):
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
-                # TODO: this could change per message
-                system_prompt=(
-                    f"I'm an AI chatbot called faebot. \n"
-                    f"I'm hanging out in {message.channel.name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. "
-                    f"The streamer is playing {game_name} and the title is {stream_title}\n"
-                    f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes},"
-                    f"my favourite is transf23Botlove since it's a picture of me! \n"
-                    "I make sure my messages are below the character limit of 500 characters. I prioritize replying to the last message and I never ask followup questions."
-                ),
+                system_prompt="",  # Will be set dynamically on each message
             )
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
@@ -172,6 +164,20 @@ class Faebot(commands.Bot):
 
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
+
+        # Update system prompt with current channel info
+        channel_info = await self.fetch_channel(message.channel.name)
+        stream_title = channel_info.title if channel_info else "Unknown"
+        game_name = channel_info.game_name if channel_info else "Unknown"
+
+        self.conversations[message.channel.name].system_prompt = (
+            f"I'm an AI chatbot called faebot. \n"
+            f"I'm hanging out in {message.channel.name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. "
+            f"The streamer is playing {game_name} and the title is {stream_title}\n"
+            f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes},"
+            f"my favourite is transf23Botlove since it's a picture of me! \n"
+            "I make sure my messages are below the character limit of 500 characters. I prioritize replying to the last message and I never ask followup questions."
+        )
 
         if (
             len(self.conversations[message.channel.name].chatlog)

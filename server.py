@@ -6,9 +6,6 @@ from fastapi.staticfiles import StaticFiles
 from silero_vad import load_silero_vad, get_speech_timestamps
 from faster_whisper import WhisperModel
 
-from datetime import datetime
-
-import wave
 import logging
 import uvicorn
 
@@ -24,7 +21,7 @@ app = FastAPI()
 vad_model = load_silero_vad()
 logging.info("VAD model loaded")
 
-whisper_model = WhisperModel("base", device="cuda", compute_type="float16")
+whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
 logging.info("Whisper model loaded")
 
 # Set up templates and static files
@@ -75,9 +72,10 @@ async def audio_websocket(websocket: WebSocket) -> None:
                 )
 
                 if speech_timestamps:
-                    logging.info(
-                        f"Speech detected: {len(speech_timestamps)} segment(s)"
-                    )
+                    segments, info = whisper_model.transcribe(audio_float)
+                    text = " ".join(segment.text for segment in segments).strip()
+                    if text:
+                        logging.info(f"Transcription [{info.language}]: {text}")
 
                 audio_buffer = audio_buffer[bytes_per_chunk:]
 

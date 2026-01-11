@@ -21,7 +21,7 @@ app = FastAPI()
 vad_model = load_silero_vad()
 logging.info("VAD model loaded")
 
-whisper_model = WhisperModel("small", device="cuda", compute_type="float16")
+whisper_model = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
 logging.info("Whisper model loaded")
 
 # Set up templates and static files
@@ -103,7 +103,10 @@ async def audio_websocket(websocket: WebSocket) -> None:
                             f"Transcribing {len(full_audio) / sample_rate:.1f}s of audio"
                         )
 
-                        segments, info = whisper_model.transcribe(full_audio)
+                        segments, info = whisper_model.transcribe(
+                            full_audio,
+                            initial_prompt="faebot, transfaeries"
+                        )
                         text = " ".join(segment.text for segment in segments).strip()
 
                         if text:

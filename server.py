@@ -21,7 +21,7 @@ app = FastAPI()
 vad_model = load_silero_vad()
 logging.info("VAD model loaded")
 
-whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+whisper_model = WhisperModel("small", device="cuda", compute_type="float16")
 logging.info("Whisper model loaded")
 
 # Set up templates and static files
@@ -58,6 +58,10 @@ async def audio_websocket(websocket: WebSocket) -> None:
 
         audio_buffer = bytearray()
 
+        # Speech accumulation
+        is_speaking = False
+        speech_buffer = []  # Will hold audio tensors during speech
+
         while True:
             data = await websocket.receive_bytes()
             audio_buffer.extend(data)
@@ -80,11 +84,33 @@ async def audio_websocket(websocket: WebSocket) -> None:
                 # Feed to VAD iterator
                 event = vad_iterator(audio_tensor, return_seconds=True)
 
-                if event:
-                    if "start" in event:
-                        logging.info(f"Speech started at {event['start']:.2f}s")
-                    if "end" in event:
-                        logging.info(f"Speech ended at {event['end']:.2f}s")
+                if event and "start" in event:
+                    logging.info(f"Speech started at {event['start']:.2f}s")
+                    is_speaking = True
+                    speech_buffer = []
+
+                if is_speaking:
+                    speech_buffer.append(audio_tensor)
+
+                if event and "end" in event:
+                    logging.info(f"Speech ended at {event['end']:.2f}s")
+                    is_speaking = False
+
+                    if speech_buffer:
+                        # Concatenate all chunks and transcribe
+                        full_audio = torch.cat(speech_buffer).numpy()
+                        logging.info(
+                            f"Transcribing {len(full_audio) / sample_rate:.1f}s of audio"
+                        )
+
+                        segments, info = whisper_model.transcribe(full_audio)
+                        text = " ".join(segment.text for segment in segments).strip()
+
+                        if text:
+                            logging.info(f"Transcription [{info.language}]: {text}")
+                            await websocket.send_text(text)
+
+                        speech_buffer = []
 
     except Exception as e:
         logging.info(f"WebSocket disconnected: {e}")

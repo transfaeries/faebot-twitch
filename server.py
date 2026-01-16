@@ -41,6 +41,8 @@ async def home(request: Request) -> HTMLResponse:
 @app.websocket("/ws/audio")
 async def audio_websocket(websocket: WebSocket) -> None:
     """WebSocket endpoint for receiving audio data and performing VAD."""
+    initial_prompt = "faebot, transfaeries"
+    prompt_words = {word.strip().lower() for word in initial_prompt.split(",")}
     try:
         logging.debug("WebSocket handler entered")
         await websocket.accept()
@@ -66,6 +68,13 @@ async def audio_websocket(websocket: WebSocket) -> None:
 
         while True:
             data = await websocket.receive_bytes()
+
+
+            # Keep-alive ping (empty message)
+            if len(data) == 0:
+                logging.debug("Keep-alive ping received")
+                continue
+
             audio_buffer.extend(data)
 
             bytes_per_chunk = vad_chunk_size * 2  # 2 bytes per int16 sample
@@ -110,9 +119,12 @@ async def audio_websocket(websocket: WebSocket) -> None:
                         )
                         text = " ".join(segment.text for segment in segments).strip()
 
-                        if text:
+                        # Filter out prompt echoes
+                        if text and text.lower() not in prompt_words:
                             logging.info(f"Transcription [{info.language}]: {text}")
                             await websocket.send_text(text)
+                        else:
+                            logging.debug(f"Filtered prompt echo: {text}")
 
                         speech_buffer = []
 

@@ -113,6 +113,14 @@ class AudioCapture {
         
         console.log('Audio capture stopped');
 
+        // Clear keep-alive interval
+        if (this.keepAliveInterval) {
+            clearInterval(this.keepAliveInterval);
+            this.keepAliveInterval = null;
+        }
+
+        console.log('WebSocket closed');
+
     }
     
     drawVisualizer() {
@@ -157,6 +165,13 @@ class AudioCapture {
             document.getElementById('connectionStatus').textContent = 'Connected';
             document.getElementById('connectionStatus').classList.remove('disconnected');   
             document.getElementById('connectionStatus').classList.add('connected');
+
+             // Keep-alive ping every 30 seconds
+            this.keepAliveInterval = setInterval(() => {
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    this.websocket.send(new ArrayBuffer(0));  // Empty message as ping
+                }
+            }, 30000);
         };
         
         this.websocket.onclose = () => {
@@ -164,6 +179,11 @@ class AudioCapture {
             document.getElementById('connectionStatus').textContent = 'Disconnected';
             document.getElementById('connectionStatus').classList.remove('connected');
             document.getElementById('connectionStatus').classList.add('disconnected');
+            
+            if (this.keepAliveInterval) {
+                clearInterval(this.keepAliveInterval);
+                this.keepAliveInterval = null;
+            }
         };
         
         this.websocket.onerror = (error) => {

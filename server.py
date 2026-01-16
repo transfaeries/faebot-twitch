@@ -5,6 +5,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from silero_vad import load_silero_vad, VADIterator
 from faster_whisper import WhisperModel
+from os import getenv
 
 import logging
 import uvicorn
@@ -105,8 +106,7 @@ async def audio_websocket(websocket: WebSocket) -> None:
                         )
 
                         segments, info = whisper_model.transcribe(
-                            full_audio,
-                            initial_prompt="faebot, transfaeries"
+                            full_audio, initial_prompt="faebot, transfaeries"
                         )
                         text = " ".join(segment.text for segment in segments).strip()
 

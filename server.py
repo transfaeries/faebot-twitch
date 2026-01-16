@@ -21,7 +21,8 @@ app = FastAPI()
 vad_model = load_silero_vad()
 logging.info("VAD model loaded")
 
-whisper_model = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
+whisper_model_name = getenv("WHISPER_MODEL_NAME", "medium")
+whisper_model = WhisperModel(whisper_model_name, device="cuda", compute_type="float16")
 logging.info("Whisper model loaded")
 
 # Set up templates and static files

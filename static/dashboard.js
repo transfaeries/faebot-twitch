@@ -63,6 +63,8 @@ class AudioCapture {
             this.stopBtn.disabled = false;
             this.statusEl.classList.add('recording');
             this.statusEl.querySelector('.label').textContent = 'Recording...';
+
+            this.reconnectAttempts = 0;
             
             const now = new Date();
             this.sessionStartEl.textContent = `Listening since ${now.toLocaleTimeString()}`;
@@ -165,17 +167,20 @@ class AudioCapture {
             document.getElementById('connectionStatus').textContent = 'Connected';
             document.getElementById('connectionStatus').classList.remove('disconnected');   
             document.getElementById('connectionStatus').classList.add('connected');
-
-             // Keep-alive ping every 30 seconds
+            
+            // Reset reconnect backoff on successful connection
+            this.reconnectAttempts = 0;
+            
+            // Keep-alive ping every 30 seconds
             this.keepAliveInterval = setInterval(() => {
                 if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                    this.websocket.send(new ArrayBuffer(0));  // Empty message as ping
+                    this.websocket.send(new ArrayBuffer(0));
                 }
             }, 30000);
         };
         
-        this.websocket.onclose = () => {
-            console.log('WebSocket disconnected');
+        this.websocket.onclose = (event) => {
+            console.log('WebSocket disconnected, code:', event.code);
             document.getElementById('connectionStatus').textContent = 'Disconnected';
             document.getElementById('connectionStatus').classList.remove('connected');
             document.getElementById('connectionStatus').classList.add('disconnected');
@@ -183,6 +188,14 @@ class AudioCapture {
             if (this.keepAliveInterval) {
                 clearInterval(this.keepAliveInterval);
                 this.keepAliveInterval = null;
+            }
+            
+            // Auto-reconnect if we're still recording
+            if (this.isRecording) {
+                this.reconnectAttempts = (this.reconnectAttempts || 0) + 1;
+                const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
+                console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+                setTimeout(() => this.connectWebSocket(), delay);
             }
         };
         

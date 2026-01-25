@@ -14,10 +14,9 @@ import os
 import signal
 import sys
 
-import uvicorn
 from uvicorn import Config, Server
 
-from faebot import Faebot, TWITCH_TOKEN, INITIAL_CHANNELS
+from faebot import Faebot, INITIAL_CHANNELS
 from server import server, app
 
 # Configure logging

@@ -6,13 +6,20 @@ from fastapi.staticfiles import StaticFiles
 from silero_vad import load_silero_vad, VADIterator
 from faster_whisper import WhisperModel
 from os import getenv
+import json
 
 import logging
 import uvicorn
 
+env = getenv("ENVIRONMENT", "dev").lower()
+if env == "prod":
+    logging_level = logging.INFO
+else:
+    logging_level = logging.DEBUG
+
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
+    level=logging_level,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 # Create FastAPI app
@@ -42,7 +49,6 @@ async def home(request: Request) -> HTMLResponse:
 async def audio_websocket(websocket: WebSocket) -> None:
     """WebSocket endpoint for receiving audio data and performing VAD."""
     initial_prompt = "faebot, transfaeries"
-    prompt_words = {word.strip().lower() for word in initial_prompt.split(",")}
     try:
         logging.debug("WebSocket handler entered")
         await websocket.accept()
@@ -68,7 +74,6 @@ async def audio_websocket(websocket: WebSocket) -> None:
 
         while True:
             data = await websocket.receive_bytes()
-
 
             # Keep-alive ping (empty message)
             if len(data) == 0:
@@ -115,14 +120,16 @@ async def audio_websocket(websocket: WebSocket) -> None:
                         )
 
                         segments, info = whisper_model.transcribe(
-                            full_audio, initial_prompt="faebot, transfaeries"
+                            full_audio, initial_prompt=initial_prompt
                         )
                         text = " ".join(segment.text for segment in segments).strip()
 
                         # Filter out prompt echoes
-                        if text and text.lower() not in prompt_words:
+                        if text and text.lower() not in initial_prompt:
                             logging.info(f"Transcription [{info.language}]: {text}")
-                            await websocket.send_text(text)
+                            await websocket.send_text(
+                                json.dumps({"text": text, "language": info.language})
+                            )
                         else:
                             logging.debug(f"Filtered prompt echo: {text}")
 

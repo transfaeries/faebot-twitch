@@ -191,8 +191,10 @@ class AudioCapture {
         };
 
         this.websocket.onmessage = (event) => {
-            const text = event.data;
-            console.log('Transcription:', text);
+            const data = JSON.parse(event.data);
+            const text = data.text;
+            const language = data.language;
+            console.log('Transcription:', text, `[${language}]`);
             
             const log = document.getElementById('transcriptionLog');
             const empty = log.querySelector('.log-empty');
@@ -201,7 +203,7 @@ class AudioCapture {
             const entry = document.createElement('div');
             entry.className = 'log-entry';
             entry.innerHTML = `
-                <div class="time">${new Date().toLocaleTimeString()}</div>
+                <div class="time">${new Date().toLocaleTimeString()} [${language}]</div>
                 <div class="text">${text}</div>
             `;
             log.appendChild(entry);

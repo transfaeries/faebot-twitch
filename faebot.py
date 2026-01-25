@@ -331,7 +331,7 @@ class Faebot(commands.Bot):
         )
 
     @commands.command()
-    async def invite(self, ctx: commands.Context) -> coroutine:
+    async def invite(self, ctx: commands.Context):
         """Invite Faebot to your channel"""
         await ctx.reply(
             "Thanks for the invitation, but you should ask the transfaeries first. Send faer a whisper!"

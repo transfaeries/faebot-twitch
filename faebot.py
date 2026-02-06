@@ -1,8 +1,7 @@
 from types import coroutine
 from typing import Optional
-from twitchio import Message, InvalidContent
+from twitchio import InvalidContent
 from twitchio.ext import commands
-import twitchio
 import os
 import aiohttp
 import logging
@@ -101,19 +100,13 @@ class Faebot(commands.Bot):
         if message.channel.name not in self.conversations:
             self.conversations[message.channel.name] = Conversation(
                 channel=message.channel.name,
-                ## todo this could change per message
-                system_prompt=(
-                    f"I'm an AI chatbot called faebot. \n"
-                    f"I'm hanging out in {message.channel.name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. The streamer is playing {game_name} and the title is {stream_title}\n"
-                    f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes}, my favourite is transf23Botlove since it's a picture of me! \n"
-                    "I always make sure my messages are below the twitch character limit which is 500 characters. I prioritize replying to the last message and I never ask followup questions."
-                ),
+                system_prompt="",  # Will be set dynamically on each message
             )
             logging.info(
                 f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
             )
 
-        ##command, execute command if appropriate otherwise return out
+        # command, execute command if appropriate otherwise return out
         # TODO: change if statement to use prefixes directly
         if (
             message.content.startswith("!")
@@ -122,7 +115,7 @@ class Faebot(commands.Bot):
         ):
             return await self.handle_commands(message)
 
-        ## log message
+        # log message
         # Use alias if available, otherwise use regular username
         display_name = self.aliases.get(message.author.name, message.author.name)
         self.conversations[message.channel.name].chatlog.append(
@@ -141,7 +134,7 @@ class Faebot(commands.Bot):
             )
             return False
 
-        if "faebot" in message.content:
+        if "faebot" in message.content.lower():
             return True
 
         if self.conversations[message.channel.name].frequency == 1:
@@ -171,6 +164,20 @@ class Faebot(commands.Bot):
 
     async def generate_response(self, message):
         """prompt the GenAI API for a message"""
+
+        # Update system prompt with current channel info
+        channel_info = await self.fetch_channel(message.channel.name)
+        stream_title = channel_info.title if channel_info else "Unknown"
+        game_name = channel_info.game_name if channel_info else "Unknown"
+
+        self.conversations[message.channel.name].system_prompt = (
+            f"I'm an AI chatbot called faebot. \n"
+            f"I'm hanging out in {message.channel.name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. "
+            f"The streamer is playing {game_name} and the title is {stream_title}\n"
+            f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes},"
+            f"my favourite is transf23Botlove since it's a picture of me! \n"
+            "I make sure my messages are below the character limit of 500 characters. I prioritize replying to the last message and I never ask followup questions."
+        )
 
         if (
             len(self.conversations[message.channel.name].chatlog)
@@ -233,8 +240,10 @@ class Faebot(commands.Bot):
             response = response[0:499] + "–"
             await message.channel.send(response)
 
-        except:
-            logging.info("Unknown error has occured, please contact the administrator.")
+        except Exception as e:
+            logging.info(
+                f"Unknown error has occured, please contact the administrator. Error: {e}"
+            )
             response = (
                 "Oops, something strange has happened. Please let the developer know!"
             )
@@ -303,24 +312,26 @@ class Faebot(commands.Bot):
             await self.session.close()
         await super().close()
 
-    ## commands for everyone ##
+    # commands for everyone #
 
     @commands.command()
     async def hello(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
-            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. "
+            "I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
         )
 
     @commands.command()
     async def help(self, ctx: commands.Context):
         """display the help message"""
         await ctx.reply(
-            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, and I'll always reply to messages with my name on them. For mod commands use 'fb;mods'"
+            "Hello, my name is faebot, I'm an AI chatbot developed by the transfaeries. I'll chime in on the chat and reply every so often, "
+            "and I'll always reply to messages with my name on them.For mod commands use 'fb;mods'"
         )
 
     @commands.command()
-    async def invite(self, ctx: commands.Context) -> coroutine:
+    async def invite(self, ctx: commands.Context):
         """Invite Faebot to your channel"""
         await ctx.reply(
             "Thanks for the invitation, but you should ask the transfaeries first. Send faer a whisper!"
@@ -330,7 +341,8 @@ class Faebot(commands.Bot):
     async def mods(self, ctx: commands.Context):
         """display the mods command message"""
         await ctx.reply(
-            "Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
+            "Here are the commands mods can use with faebot. | fb;freq to set the frequency of responses. | fb;hist to set message history length.| "
+            "fb;silence to silence faebot entirely. | fb;clear to clear faebot's memory. | fb;part to have faebot leave the channel."
         )
 
     @commands.command()
@@ -351,7 +363,7 @@ class Faebot(commands.Bot):
             new_alias = " ".join(arguments[1:])
             self.aliases[username] = new_alias
             reply = f"Got it! From now on I'll think of you as {new_alias}"
-            ## log users request and faebot's response so it shows up in chatlog
+            # log users request and faebot's response so it shows up in chatlog
             self.conversations[ctx.channel.name].chatlog.append(
                 f"{username}: fae;alias {new_alias}"
             )
@@ -365,10 +377,10 @@ class Faebot(commands.Bot):
             )
         else:
             return await ctx.reply(
-                f"You haven't given me a different name to use. Use 'fae;alias <name>' to set one!"
+                "You haven't given me a different name to use. Use 'fae;alias <name>' to set one!"
             )
 
-    ## commands for mods ##
+    # commands for mods ##
 
     def requires_mod(command: commands) -> commands:
         @wraps(command)
@@ -458,7 +470,7 @@ class Faebot(commands.Bot):
         )
         return await ctx.send(reply)
 
-    ### commands for admins ###
+    # commands for admins ###
 
     @commands.command()
     async def join(self, ctx: commands.Context, user: str | None) -> coroutine:

@@ -2,3 +2,4 @@ snippets/*
 faebot_messages.json
 permalog.txt
 __pycache__/*
+node_modules/*

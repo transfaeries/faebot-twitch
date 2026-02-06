@@ -1,0 +1,223 @@
+:root {
+    /* Main colors - edit these to customize */
+    --color-primary: #87CEFA;       /* sky blue - headers, accents */
+    --color-primary-dim: #5b9fc4;   /* darker blue - hover states */
+    --color-secondary: #CCCCCC;     /* silver - body text */
+    --color-secondary-dim: #888888; /* darker silver - muted text */
+    
+    /* Backgrounds - darkest to lightest */
+    --bg-deepest: #0d0d14;          /* page background */
+    --bg-deep: #1a1a2e;             /* card backgrounds */
+    --bg-surface: #252540;          /* input fields, log areas */
+    
+    /* Status colors */
+    --color-success: #4ade80;
+    --color-error: #f87171;
+    
+    /* Spacing */
+    --space-sm: 0.5rem;
+    --space-md: 1rem;
+    --space-lg: 1.5rem;
+    --space-xl: 2rem;
+    
+    /* Border radius */
+    --radius: 8px;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-deepest);
+    color: var(--color-secondary);
+    min-height: 100vh;
+    padding: var(--space-lg);
+}
+
+/* Layout */
+.container {
+    max-width: 1000px;
+    margin: 0 auto;
+}
+
+/* Header */
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: var(--space-lg);
+    border-bottom: 1px solid var(--bg-surface);
+    margin-bottom: var(--space-lg);
+}
+
+header h1 {
+    color: var(--color-primary);
+    font-size: 1.5rem;
+}
+
+.status-badge {
+    padding: var(--space-sm) var(--space-md);
+    border-radius: 9999px;
+    font-size: 0.875rem;
+}
+
+.status-badge.connected {
+    background: rgba(74, 222, 128, 0.2);
+    color: var(--color-success);
+}
+
+.status-badge.disconnected {
+    background: rgba(248, 113, 113, 0.2);
+    color: var(--color-error);
+}
+
+/* Cards */
+.card {
+    background: var(--bg-deep);
+    border-radius: var(--radius);
+    padding: var(--space-lg);
+    margin-bottom: var(--space-lg);
+}
+
+.card h2 {
+    color: var(--color-secondary);
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: var(--space-md);
+}
+
+/* Audio controls */
+.audio-controls {
+    display: flex;
+    gap: var(--space-md);
+    margin-bottom: var(--space-md);
+}
+
+.btn {
+    padding: var(--space-sm) var(--space-lg);
+    border: none;
+    border-radius: var(--radius);
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-primary {
+    background: var(--color-primary);
+    color: var(--bg-deepest);
+}
+
+.btn-primary:hover {
+    background: var(--color-primary-dim);
+}
+
+.btn-danger {
+    background: var(--color-error);
+    color: white;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Audio status indicator */
+.audio-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    color: var(--color-secondary-dim);
+    font-size: 0.875rem;
+}
+
+.audio-status .indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--color-secondary-dim);
+}
+
+.audio-status.recording .indicator {
+    background: var(--color-error);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Visualizer */
+.visualizer {
+    height: 60px;
+    background: var(--bg-surface);
+    border-radius: var(--radius);
+    margin-top: var(--space-md);
+}
+
+.visualizer canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* Stats row */
+.stats {
+    display: flex;
+    gap: var(--space-xl);
+    margin-top: var(--space-md);
+}
+
+.stat {
+    text-align: center;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    color: var(--color-primary);
+    font-weight: bold;
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    color: var(--color-secondary-dim);
+    text-transform: uppercase;
+}
+
+/* Transcription log */
+.log {
+    background: var(--bg-surface);
+    border-radius: var(--radius);
+    padding: var(--space-md);
+    height: 250px;
+    overflow-y: auto;
+}
+
+.log-empty {
+    color: var(--color-secondary-dim);
+    font-style: italic;
+    text-align: center;
+    padding: var(--space-xl);
+}
+
+.log-entry {
+    padding: var(--space-sm);
+    margin-bottom: var(--space-sm);
+    background: var(--bg-deep);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--color-primary);
+}
+
+.log-entry .time {
+    font-size: 0.75rem;
+    color: var(--color-secondary-dim);
+}
+
+.log-entry .text {
+    margin-top: var(--space-sm);
+}

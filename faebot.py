@@ -60,28 +60,36 @@ class Faebot(commands.Bot):
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...
         self.session = aiohttp.ClientSession()  # Initialize HTTP session
-        self.emotes = [
-            "transf23AYAYA",
-            "transf23Plurallove",
-            "transf23Petblythe",
-            "transf23GQPride",
-            "transf23Smart",
-            "transf23Flutter",
-            "transf23Pride",
-            "transf23Smirk",
-            "transf23Faebothi",
-            "transf23Gentle",
-            "transf23Petminou",
-            "transf23Bark",
-            "transf23Petfaebot",
-            "transf23Botlove",
-            "transf23Angy",
-            "transf23Petaisling",
-            "transf23Petember",
-        ]
+        await self.fetch_emotes()
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
+
+    async def fetch_emotes(self):
+        """Fetch channel emotes for all joined channels from the Twitch API"""
+        self.emotes = []
+        for channel in self.connected_channels:
+            try:
+                users = await self.fetch_users(names=[channel.name])
+                if users:
+                    channel_emotes = await users[0].fetch_channel_emotes()
+                    # Only include emotes faebot can actually use (tier 1 and follower)
+                    available = [
+                        emote.name
+                        for emote in channel_emotes
+                        if emote.tier == "1000"
+                        or emote.type == "follower"
+                    ]
+                    self.emotes.extend(available)
+                    logging.info(
+                        f"Fetched {len(available)}/{len(channel_emotes)} usable emotes from {channel.name}"
+                    )
+            except Exception as e:
+                logging.warning(f"Failed to fetch emotes for {channel.name}: {e}")
+        if not self.emotes:
+            logging.warning("No emotes fetched from any channel")
+        else:
+            logging.info(f"Total emotes loaded: {self.emotes}")
 
     async def event_message(self, message):
         # Messages with echo set to True are messages sent by the bot...

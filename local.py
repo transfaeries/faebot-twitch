@@ -24,7 +24,6 @@ async def main():
     if not os.getenv("TWITCH_TOKEN"):
         logging.error(
             "TWITCH_TOKEN not set. Did you forget to source secrets?\n"
-            "  Run: source ../secrets/twitchsecrets.fish"
         )
         return
 
@@ -44,7 +43,6 @@ async def main():
     except AuthenticationError:
         logging.error(
             "Twitch authentication failed. Your token may be expired.\n"
-            "  Run: source ../secrets/twitchsecrets.fish"
         )
     except asyncio.CancelledError:
         pass

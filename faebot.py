@@ -36,7 +36,7 @@ class Conversation:
     conversants: list = field(default_factory=list)
     system_prompt: str = ""
     frequency: int = 10
-    history: int = 5
+    history: int = 20
     model: str = MODEL
     silenced: bool = False
 
@@ -91,6 +91,22 @@ class Faebot(commands.Bot):
         else:
             logging.info(f"Total emotes loaded: {self.emotes}")
 
+    def ensure_conversation(self, channel_name: str) -> Conversation:
+        """Get or create a conversation for a channel."""
+        if channel_name not in self.conversations:
+            self.conversations[channel_name] = Conversation(
+                channel=channel_name,
+                system_prompt="",
+            )
+            logging.info(f"Created new conversation for {channel_name}")
+        return self.conversations[channel_name]
+
+    async def handle_transcription(self, channel_name: str, text: str):
+        """Handle a voice transcription from the streamer."""
+        conversation = self.ensure_conversation(channel_name)
+        conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
+        logging.info(f"Voice transcription added to {channel_name}: {text}")
+
     async def event_message(self, message):
         # Messages with echo set to True are messages sent by the bot...
         # For now we just want to ignore them...
@@ -105,14 +121,7 @@ class Faebot(commands.Bot):
         logging.info(f"channel object {message.channel.name}")
         logging.info(f"channel title: {stream_title}")
         logging.info(f"channel category: {game_name}")
-        if message.channel.name not in self.conversations:
-            self.conversations[message.channel.name] = Conversation(
-                channel=message.channel.name,
-                system_prompt="",  # Will be set dynamically on each message
-            )
-            logging.info(
-                f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
-            )
+        self.ensure_conversation(message.channel.name)
 
         # command, execute command if appropriate otherwise return out
         # TODO: change if statement to use prefixes directly
@@ -508,5 +517,10 @@ class Faebot(commands.Bot):
 
 
 if __name__ == "__main__":
-    bot = Faebot()
-    bot.run()
+    if not TWITCH_TOKEN:
+        logging.error(
+            "TWITCH_TOKEN not set. Did you forget to source secrets?\n"
+        )
+    else:
+        bot = Faebot()
+        bot.run()

@@ -141,6 +141,15 @@ def create_app(bot=None):
                                         {"text": text, "language": info.language}
                                     )
                                 )
+
+                                # Feed transcription to bot if connected
+                                if app.state.bot:
+                                    streamer = getenv(
+                                        "STREAMER_CHANNEL", "transfaeries"
+                                    )
+                                    await app.state.bot.handle_transcription(
+                                        streamer, text
+                                    )
                             else:
                                 logging.debug(f"Filtered prompt echo: {text}")
 

@@ -507,5 +507,6 @@ class Faebot(commands.Bot):
         )
 
 
-bot = Faebot()
-bot.run()
+if __name__ == "__main__":
+    bot = Faebot()
+    bot.run()

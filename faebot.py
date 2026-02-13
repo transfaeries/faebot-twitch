@@ -73,9 +73,16 @@ class Faebot(commands.Bot):
                 users = await self.fetch_users(names=[channel.name])
                 if users:
                     channel_emotes = await users[0].fetch_channel_emotes()
-                    self.emotes.extend([emote.name for emote in channel_emotes])
+                    # Only include emotes faebot can actually use (tier 1 and follower)
+                    available = [
+                        emote.name
+                        for emote in channel_emotes
+                        if emote.tier == "1000"
+                        or emote.type == "follower"
+                    ]
+                    self.emotes.extend(available)
                     logging.info(
-                        f"Fetched {len(channel_emotes)} emotes from {channel.name}"
+                        f"Fetched {len(available)}/{len(channel_emotes)} usable emotes from {channel.name}"
                     )
             except Exception as e:
                 logging.warning(f"Failed to fetch emotes for {channel.name}: {e}")

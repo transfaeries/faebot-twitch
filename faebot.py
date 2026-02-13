@@ -45,7 +45,9 @@ class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
-        self.aliases: dict[str, str] = {}  # Store user aliases (username -> alias)
+        self.aliases: dict[str, str] = {
+            "hatsunemikuisbestwaifu": "Miku",
+        }
         self.session: Optional[
             aiohttp.ClientSession
         ] = None  # Add session for HTTP requests

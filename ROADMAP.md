@@ -5,10 +5,13 @@
 - [x] Filter to tier 1 + follower emotes only
 - [x] Fix stream category injection
 
-## Phase 2: Voice Integration (Next Priority)
-- [ ] Combined entry point (FastAPI + TwitchIO in one async process)
-- [ ] Feed voice transcriptions into conversation context
-- [ ] Separate reply frequency for streamer voice vs chat messages
+## Phase 2: Voice Integration (In Progress)
+- [x] Combined entry point (FastAPI + TwitchIO in one async process)
+- [x] Feed voice transcriptions into conversation context
+- [x] Friendly error handling and clean shutdown
+- [ ] Voice-triggered replies (faebot can respond to spoken words, not just chat)
+- [ ] Voice reply frequency (separate, lower rate for streamer speech)
+- [ ] Dashboard improvements (interleaved chat + transcriptions, prompt window highlighting)
 
 ## Phase 3: Code Quality & Resilience
 - [ ] Linting fixes + type hints

@@ -6,7 +6,9 @@ in a single async process so they can share state.
 
 import asyncio
 import logging
+import os
 import uvicorn
+from twitchio.errors import AuthenticationError
 from faebot import Faebot
 from server import create_app
 
@@ -18,6 +20,14 @@ logging.basicConfig(
 
 
 async def main():
+    # Check for required env vars before loading heavy models
+    if not os.getenv("TWITCH_TOKEN"):
+        logging.error(
+            "TWITCH_TOKEN not set. Did you forget to source secrets?\n"
+            "  Run: source ../secrets/twitchsecrets.fish"
+        )
+        return
+
     bot = Faebot()
     app = create_app(bot=bot)
 
@@ -25,12 +35,25 @@ async def main():
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)
 
-    # Run both the Twitch bot and the FastAPI server concurrently
-    await asyncio.gather(
-        bot.start(),
-        server.serve(),
-    )
+    try:
+        # Run both the Twitch bot and the FastAPI server concurrently
+        await asyncio.gather(
+            bot.start(),
+            server.serve(),
+        )
+    except AuthenticationError:
+        logging.error(
+            "Twitch authentication failed. Your token may be expired.\n"
+            "  Run: source ../secrets/twitchsecrets.fish"
+        )
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await bot.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Shutting down faebot.")

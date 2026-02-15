@@ -11,10 +11,11 @@
 - [x] Friendly error handling and clean shutdown
 - [ ] Voice-triggered replies (faebot can respond to spoken words, not just chat)
 - [ ] Voice reply frequency (separate, lower rate for streamer speech)
-- [ ] Dashboard improvements (interleaved chat + transcriptions, prompt window highlighting)
+- [ ] Dashboard improvements (interleaved chat + transcriptions, prompt window highlighting, better language showing)
 
 ## Phase 3: Code Quality & Resilience
 - [ ] Linting fixes + type hints
+- [ ] Run Whisper transcription in executor (unblock event loop during transcription)
 - [ ] Retry logic for API calls
 - [ ] Graceful shutdown
 - [ ] Basic test suite

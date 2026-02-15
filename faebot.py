@@ -145,11 +145,9 @@ class Faebot(commands.Bot):
         if self.choose_to_reply(
             message.channel.name, message.content, conversation.frequency
         ):
-            return asyncio.create_task(self.generate_response(message))
+            return asyncio.create_task(self.generate_response(message.channel.name))
 
-    def choose_to_reply(
-        self, channel_name: str, text: str, frequency: float
-    ) -> bool:
+    def choose_to_reply(self, channel_name: str, text: str, frequency: float) -> bool:
         """Determine whether faebot replies to a message or not."""
         conversation = self.conversations[channel_name]
 
@@ -178,42 +176,35 @@ class Faebot(commands.Bot):
         with open("permalog.txt", "a") as permalog:
             permalog.write(log_message)
 
-    async def generate_response(self, message):
+    async def generate_response(self, channel_name: str):
         """prompt the GenAI API for a message"""
 
+        conversation = self.conversations[channel_name]
+        channel = self.get_channel(channel_name)
+
         # Update system prompt with current channel info
-        channel_info = await self.fetch_channel(message.channel.name)
+        channel_info = await self.fetch_channel(channel_name)
         stream_title = channel_info.title if channel_info else "Unknown"
         game_name = channel_info.game_name if channel_info else "Unknown"
 
-        self.conversations[message.channel.name].system_prompt = (
+        conversation.system_prompt = (
             f"I'm an AI chatbot called faebot. \n"
-            f"I'm hanging out in {message.channel.name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. "
+            f"I'm hanging out in {channel_name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {channel_name}, is doing. "
             f"The streamer is playing {game_name} and the title is {stream_title}\n"
             f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes},"
             f"my favourite is transf23Botlove since it's a picture of me! \n"
             "I make sure my messages are below the character limit of 500 characters. I prioritize replying to the last message and I never ask followup questions."
         )
 
-        if (
-            len(self.conversations[message.channel.name].chatlog)
-            > self.conversations[message.channel.name].history
-        ):
+        if len(conversation.chatlog) > conversation.history:
             logging.info(
-                f"message history has exceeded the set history length of {self.conversations[message.channel.name].history}"
+                f"message history has exceeded the set history length of {conversation.history}"
             )
-            self.conversations[message.channel.name].chatlog = self.conversations[
-                message.channel.name
-            ].chatlog[
-                len(self.conversations[message.channel.name].chatlog)
-                - self.conversations[message.channel.name].history :
-            ]
+            conversation.chatlog = conversation.chatlog[-conversation.history :]
 
-        prompt = (
-            "\n".join(self.conversations[message.channel.name].chatlog) + "\nfaebot:"
-        )
+        prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
         logging.info(
-            f"model: {self.conversations[message.channel.name].model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}"
+            f"model: {conversation.model}\nsystem_prompt: \n{conversation.system_prompt}\nprompt: \n{prompt}"
         )
 
         params = {
@@ -222,14 +213,13 @@ class Faebot(commands.Bot):
             "top_k": randrange(1, 1024),
             "seed": randrange(1, 1024),
         }
-        # params = {"temperature":1.5, "top_p":0.5, "top_k": 232}
 
         logging.info(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
         )
         current_time = datetime.datetime.now()
         self.permalog(
-            f"generating message in channel {message.channel.name}'s channel at {current_time}\n"
+            f"generating message in channel {channel_name}'s channel at {current_time}\n"
         )
         self.permalog(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
@@ -237,24 +227,23 @@ class Faebot(commands.Bot):
 
         try:
             response = await self.generate(
-                model=self.conversations[message.channel.name].model,
+                model=conversation.model,
                 prompt=prompt,
-                author=message.author.display_name,
-                system_prompt=self.conversations[message.channel.name].system_prompt,
+                system_prompt=conversation.system_prompt,
                 params=params,
             )
             logging.info(f"received response: {response}")
             self.permalog(
                 f"generated message:{response}\n------------------------------------------------------------\n\n"
             )
-            await message.channel.send(response)
+            await channel.send(response)
 
         except InvalidContent:
             logging.info(
                 "generated content exceeded 500 characters, trimming and posting."
             )
             response = response[0:499] + "–"
-            await message.channel.send(response)
+            await channel.send(response)
 
         except Exception as e:
             logging.info(
@@ -263,15 +252,14 @@ class Faebot(commands.Bot):
             response = (
                 "Oops, something strange has happened. Please let the developer know!"
             )
-            await message.channel.send(response)
+            await channel.send(response)
 
-        self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
+        conversation.chatlog.append(f"faebot: {response}")
         return
 
     async def generate(
         self,
         prompt: str = "",
-        author="",
         model=MODEL,
         system_prompt="",
         params={"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666},

@@ -22,9 +22,7 @@ logging.basicConfig(
 async def main():
     # Check for required env vars before loading heavy models
     if not os.getenv("TWITCH_TOKEN"):
-        logging.error(
-            "TWITCH_TOKEN not set. Did you forget to source secrets?\n"
-        )
+        logging.error("TWITCH_TOKEN not set. Did you forget to source secrets?\n")
         return
 
     bot = Faebot()
@@ -41,9 +39,7 @@ async def main():
             server.serve(),
         )
     except AuthenticationError:
-        logging.error(
-            "Twitch authentication failed. Your token may be expired.\n"
-        )
+        logging.error("Twitch authentication failed. Your token may be expired.\n")
     except asyncio.CancelledError:
         pass
     finally:

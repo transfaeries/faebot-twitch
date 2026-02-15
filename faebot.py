@@ -7,7 +7,7 @@ import aiohttp
 import logging
 import asyncio
 import datetime
-from random import randrange
+from random import randrange, random
 from dataclasses import dataclass, field
 from functools import wraps
 import signal
@@ -32,10 +32,11 @@ class Conversation:
     """for storing conversations"""
 
     channel: str
-    chatlog: list = field(default_factory=list)  # dict[int, Message]
+    chatlog: list = field(default_factory=list)
     conversants: list = field(default_factory=list)
     system_prompt: str = ""
-    frequency: int = 10
+    frequency: float = 0.1
+    voice_frequency: float = 0.05
     history: int = 20
     model: str = MODEL
     silenced: bool = False
@@ -79,8 +80,7 @@ class Faebot(commands.Bot):
                     available = [
                         emote.name
                         for emote in channel_emotes
-                        if emote.tier == "1000"
-                        or emote.type == "follower"
+                        if emote.tier == "1000" or emote.type == "follower"
                     ]
                     self.emotes.extend(available)
                     logging.info(
@@ -144,38 +144,33 @@ class Faebot(commands.Bot):
         if self.choose_to_reply(message):
             return asyncio.create_task(self.generate_response(message))
 
-    def choose_to_reply(self, message) -> bool:
+    def choose_to_reply(self, message, frequency: float = None) -> bool:
         """determine whether faebot replies to a message or not"""
+        conversation = self.conversations[message.channel.name]
 
-        if self.conversations[message.channel.name].silenced:
-            logging.info(
-                f"faebot is silenced in channel {message.channel.name} faebot won't reply!"
-            )
+        if conversation.silenced:
+            logging.info(f"faebot is silenced in {message.channel.name}")
             return False
 
         if "faebot" in message.content.lower():
             return True
 
-        if self.conversations[message.channel.name].frequency == 1:
-            logging.info(
-                f"frequency set to {self.conversations[message.channel.name].frequency} in this channel generating on every message!"
-            )
-            return True
+        if frequency is None:
+            frequency = conversation.frequency
 
-        if self.conversations[message.channel.name].frequency < 1:
-            logging.info(
-                f"frequency set to {self.conversations[message.channel.name].frequency}, that's fewer than one faebot will only reply to faer name!"
-            )
+        if frequency <= 0:
             return False
 
+        if frequency >= 1:
+            return True
+
+        roll = random()
+        if roll < frequency:
+            logging.info(f"Rolled {roll:.3f} < {frequency}, generating!")
+            return True
         else:
-            chance = randrange(self.conversations[message.channel.name].frequency)
-            if chance == 0:
-                logging.info(f"rolled a {chance} generating!")
-                return True
-            else:
-                logging.info(f"rolled a {chance}, not generating!")
-                return False
+            logging.info(f"Rolled {roll:.3f} >= {frequency}, not generating.")
+            return False
 
     def permalog(self, log_message):
         with open("permalog.txt", "a") as permalog:
@@ -420,17 +415,27 @@ class Faebot(commands.Bot):
     @commands.command()
     @requires_mod
     async def freq(self, ctx: commands.Context):
-        """check or change message frequency in this channel"""
+        """check or change message frequency in this channel.
+        Usage: fb;freq [chat_freq] [voice_freq]
+        Frequency is 0-1 (e.g. 0.1 = 10% chance to reply)"""
         arguments = ctx.message.content.split(" ")
+        conversation = self.conversations[ctx.channel.name]
         if len(arguments) > 1:
-            if str(arguments[1]).isdigit():
-                self.conversations[ctx.channel.name].frequency = int(arguments[1])
-                return await ctx.send(
-                    f"changed message frequency in this channel to {self.conversations[ctx.channel.name].frequency}"
-                )
+            try:
+                new_freq = float(arguments[1])
+                conversation.frequency = new_freq
+                msg = f"Chat frequency set to {new_freq}"
+                if len(arguments) > 2:
+                    voice_freq = float(arguments[2])
+                    conversation.voice_frequency = voice_freq
+                    msg += f", voice frequency set to {voice_freq}"
+                return await ctx.send(msg)
+            except ValueError:
+                return await ctx.send("Frequency must be a number between 0 and 1")
 
         return await ctx.send(
-            f"current message frequency in this channel is {self.conversations[ctx.channel.name].frequency}"
+            f"Chat frequency: {conversation.frequency}, "
+            f"Voice frequency: {conversation.voice_frequency}"
         )
 
     @commands.command()
@@ -520,9 +525,7 @@ class Faebot(commands.Bot):
 
 if __name__ == "__main__":
     if not TWITCH_TOKEN:
-        logging.error(
-            "TWITCH_TOKEN not set. Did you forget to source secrets?\n"
-        )
+        logging.error("TWITCH_TOKEN not set. Did you forget to source secrets?\n")
     else:
         bot = Faebot()
         bot.run()

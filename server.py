@@ -44,7 +44,6 @@ def create_app(bot=None):
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
-
     @app.get("/", response_class=HTMLResponse)
     async def home(request: Request) -> HTMLResponse:
         """Render the dashboard page."""
@@ -133,9 +132,7 @@ def create_app(bot=None):
 
                             # Filter out prompt echoes
                             if text and text.lower() not in initial_prompt:
-                                logging.info(
-                                    f"Transcription [{info.language}]: {text}"
-                                )
+                                logging.info(f"Transcription [{info.language}]: {text}")
                                 await websocket.send_text(
                                     json.dumps(
                                         {"text": text, "language": info.language}

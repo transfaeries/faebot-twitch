@@ -142,21 +142,17 @@ class Faebot(commands.Bot):
         )
 
         conversation = self.conversations[message.channel.name]
-        if self.choose_to_reply(
-            message.channel.name, message.content, conversation.frequency
-        ):
+        frequency = 1.0 if "faebot" in message.content.lower() else conversation.frequency
+        if self.choose_to_reply(message.channel.name, frequency):
             return asyncio.create_task(self.generate_response(message.channel.name))
 
-    def choose_to_reply(self, channel_name: str, text: str, frequency: float) -> bool:
-        """Determine whether faebot replies to a message or not."""
+    def choose_to_reply(self, channel_name: str, frequency: float) -> bool:
+        """Determine whether faebot replies based on frequency. Callers compute the effective frequency."""
         conversation = self.conversations[channel_name]
 
         if conversation.silenced:
             logging.info(f"faebot is silenced in {channel_name}")
             return False
-
-        if "faebot" in text.lower():
-            return True
 
         if frequency <= 0:
             return False

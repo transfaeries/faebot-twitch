@@ -109,6 +109,14 @@ class Faebot(commands.Bot):
         conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
         logging.info(f"Voice transcription added to {channel_name}: {text}")
 
+        if "faebot" in text.lower():
+            logging.info(f"faebot mentioned by streamer, boosting to chat frequency ({conversation.frequency})")
+            frequency = conversation.frequency
+        else:
+            frequency = conversation.voice_frequency
+        if self.choose_to_reply(channel_name, frequency):
+            asyncio.create_task(self.generate_response(channel_name))
+
     async def event_message(self, message):
         # Messages with echo set to True are messages sent by the bot...
         # For now we just want to ignore them...
@@ -142,7 +150,11 @@ class Faebot(commands.Bot):
         )
 
         conversation = self.conversations[message.channel.name]
-        frequency = 1.0 if "faebot" in message.content.lower() else conversation.frequency
+        if "faebot" in message.content.lower():
+            logging.info(f"faebot mentioned by {display_name}, replying")
+            frequency = 1.0
+        else:
+            frequency = conversation.frequency
         if self.choose_to_reply(message.channel.name, frequency):
             return asyncio.create_task(self.generate_response(message.channel.name))
 
@@ -155,9 +167,11 @@ class Faebot(commands.Bot):
             return False
 
         if frequency <= 0:
+            logging.info(f"frequency is set to {frequency}, not replying.")
             return False
 
         if frequency >= 1:
+            logging.info(f"frequency is set to {frequency}, always replying.")
             return True
 
         roll = random()

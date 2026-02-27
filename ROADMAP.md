@@ -5,13 +5,14 @@
 - [x] Filter to tier 1 + follower emotes only
 - [x] Fix stream category injection
 
-## Phase 2: Voice Integration (In Progress)
+## Phase 2: Voice Integration (Done pending live test)
 - [x] Combined entry point (FastAPI + TwitchIO in one async process)
 - [x] Feed voice transcriptions into conversation context
 - [x] Friendly error handling and clean shutdown
-- [ ] Voice-triggered replies (faebot can respond to spoken words, not just chat)
-- [ ] Voice reply frequency (separate, lower rate for streamer speech)
-- [ ] Dashboard improvements (interleaved chat + transcriptions, prompt window highlighting, better language showing)
+- [x] Voice-triggered replies with separate voice frequency
+- [x] Name mentions: always trigger from chat, boost to chat rate from voice
+- [ ] Merge to main + linting pass
+- [ ] Dashboard improvements (interleaved chat + transcriptions, prompt window highlighting)
 
 ## Phase 3: Code Quality & Resilience
 - [ ] Linting fixes + type hints
@@ -21,19 +22,26 @@
 - [ ] Basic test suite
 
 ## Phase 4: Database Integration
-- [ ] PostgreSQL setup with asyncpg
+- [ ] PostgreSQL setup with asyncpg (port from Discord bot)
+- [ ] Replace permalog.txt with structured DB logging (conversations, transcriptions)
 - [ ] Conversation persistence across restarts
-- [ ] Voice transcription logging
+- [ ] Queryable history for training data collection
 
 ## Phase 5: Local Model Generation (KoboldCPP)
 - [ ] KoboldCPP client on separate machine
 - [ ] Fallback to OpenRouter when local model is unavailable
 - [ ] Per-channel model selection
 
-## Phase 6: Feature Improvements
-- [ ] Better prompt system (placeholder-based, admin-editable, persistent)
-- [ ] Richer context in messages (timestamps, reply tracking)
-- [ ] Dev environment support
+## Phase 6: Custom Faebot Model
+- [ ] Collect and curate training data (chat logs, voice transcriptions, streamer messages)
+- [ ] Include streamer's own voice/messages so faebot sounds like faer sister
+- [ ] Fine-tune a small base model (Mistral/Llama-class)
+- [ ] Deploy via KoboldCPP, use across both Twitch and Discord bots
+
+## Phase 7: Text-to-Speech
+- [ ] Faebot speaks on stream (not just types in chat)
+- [ ] Voice should feel consistent with faebot's personality
+- [ ] Likely after custom model work so voice + personality are coherent
 
 ## Future Emote Improvements
 - Emote descriptions so the LLM can choose contextually appropriate emotes

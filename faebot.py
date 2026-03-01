@@ -1,4 +1,3 @@
-from types import coroutine
 from typing import Optional
 from twitchio import InvalidContent
 from twitchio.ext import commands
@@ -110,7 +109,9 @@ class Faebot(commands.Bot):
         logging.info(f"Voice transcription added to {channel_name}: {text}")
 
         if "faebot" in text.lower():
-            logging.info(f"faebot mentioned by streamer, boosting to chat frequency ({conversation.frequency})")
+            logging.info(
+                f"faebot mentioned by streamer, boosting to chat frequency ({conversation.frequency})"
+            )
             frequency = conversation.frequency
         else:
             frequency = conversation.voice_frequency
@@ -497,7 +498,7 @@ class Faebot(commands.Bot):
     # commands for admins ###
 
     @commands.command()
-    async def join(self, ctx: commands.Context, user: str | None) -> coroutine:
+    async def join(self, ctx: commands.Context, user: str | None) -> None:
         """invite faebot to join a channel"""
         if ctx.author.name not in ADMIN:
             return await ctx.send("sorry you need to be an admin to use that command")

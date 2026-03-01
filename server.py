@@ -74,7 +74,7 @@ def create_app(bot=None):
 
             # Speech accumulation
             is_speaking = False
-            speech_buffer = []  # Will hold audio tensors during speech
+            speech_buffer: list = []  # Will hold audio tensors during speech
 
             while True:
                 data = await websocket.receive_bytes()

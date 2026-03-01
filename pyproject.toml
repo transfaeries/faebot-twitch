@@ -27,3 +27,7 @@ mypy = "^1.19.1"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[[tool.mypy.overrides]]
+module = ["twitchio", "twitchio.*", "silero_vad", "faster_whisper"]
+ignore_missing_imports = true

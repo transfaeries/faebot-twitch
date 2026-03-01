@@ -31,7 +31,6 @@ class Conversation:
 
     channel: str
     chatlog: list = field(default_factory=list)
-    conversants: list = field(default_factory=list)
     frequency: float = 0.1
     voice_frequency: float = 0.05
     history: int = 20
@@ -49,7 +48,7 @@ class Faebot(commands.Bot):
         self.session: Optional[
             aiohttp.ClientSession
         ] = None  # Add session for HTTP requests
-        self.emotes = list()  # Store emotes for each channel
+        self.emotes: list = []
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -124,14 +123,7 @@ class Faebot(commands.Bot):
         if message.echo:
             return
 
-        # Print the contents of our message to console...
-        channel_info = await self.fetch_channel(message.channel.name)
-        stream_title = channel_info.title if channel_info else "Unknown"
-        game_name = channel_info.game_name if channel_info else "Unknown"
         logging.info(f"received message: {message.author}: {message.content}")
-        logging.info(f"channel object {message.channel.name}")
-        logging.info(f"channel title: {stream_title}")
-        logging.info(f"channel category: {game_name}")
         self.ensure_conversation(message.channel.name)
 
         # command, execute command if appropriate otherwise return out
@@ -269,9 +261,12 @@ class Faebot(commands.Bot):
         prompt: str = "",
         model=MODEL,
         system_prompt="",
-        params={"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666},
+        params=None,
     ) -> str:
         """generates completions with the OpenRouter API"""
+
+        if params is None:
+            params = {"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666}
 
         if not self.session:
             self.session = aiohttp.ClientSession()

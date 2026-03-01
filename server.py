@@ -7,9 +7,10 @@ from silero_vad import load_silero_vad, VADIterator
 from faster_whisper import WhisperModel
 from os import getenv
 import json
-
 import logging
 import uvicorn
+import numpy as np
+import torch
 
 env = getenv("ENVIRONMENT", "dev").lower()
 if env == "prod":
@@ -94,9 +95,6 @@ def create_app(bot=None):
                     audio_buffer = audio_buffer[bytes_per_chunk:]
 
                     # Convert to tensor for VAD
-                    import numpy as np
-                    import torch
-
                     audio_array = np.frombuffer(chunk_bytes, dtype=np.int16)
                     audio_float = audio_array.astype(np.float32) / 32768.0
                     audio_tensor = torch.from_numpy(audio_float)

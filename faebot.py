@@ -1,5 +1,4 @@
 from typing import Optional
-from twitchio import InvalidContent
 from twitchio.ext import commands
 import os
 import aiohttp
@@ -33,7 +32,6 @@ class Conversation:
     channel: str
     chatlog: list = field(default_factory=list)
     conversants: list = field(default_factory=list)
-    system_prompt: str = ""
     frequency: float = 0.1
     voice_frequency: float = 0.05
     history: int = 20
@@ -76,6 +74,8 @@ class Faebot(commands.Bot):
                 if users:
                     channel_emotes = await users[0].fetch_channel_emotes()
                     # Only include emotes faebot can actually use (tier 1 and follower)
+                    # TODO: fetch emote usability programmatically (e.g. fetch_user_emotes with faebot's token)
+                    # rather than assuming tier "1000" and type "follower" are always the right filter
                     available = [
                         emote.name
                         for emote in channel_emotes
@@ -97,7 +97,6 @@ class Faebot(commands.Bot):
         if channel_name not in self.conversations:
             self.conversations[channel_name] = Conversation(
                 channel=channel_name,
-                system_prompt="",
             )
             logging.info(f"Created new conversation for {channel_name}")
         return self.conversations[channel_name]
@@ -105,6 +104,7 @@ class Faebot(commands.Bot):
     async def handle_transcription(self, channel_name: str, text: str):
         """Handle a voice transcription from the streamer."""
         conversation = self.ensure_conversation(channel_name)
+        # TODO: apply aliases here — streamer's alias isn't reflected in voice transcriptions
         conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
         logging.info(f"Voice transcription added to {channel_name}: {text}")
 
@@ -193,12 +193,12 @@ class Faebot(commands.Bot):
         conversation = self.conversations[channel_name]
         channel = self.get_channel(channel_name)
 
-        # Update system prompt with current channel info
+        # Build system prompt with current channel info
         channel_info = await self.fetch_channel(channel_name)
         stream_title = channel_info.title if channel_info else "Unknown"
         game_name = channel_info.game_name if channel_info else "Unknown"
 
-        conversation.system_prompt = (
+        system_prompt = (
             f"I'm an AI chatbot called faebot. \n"
             f"I'm hanging out in {channel_name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {channel_name}, is doing. "
             f"The streamer is playing {game_name} and the title is {stream_title}\n"
@@ -215,7 +215,7 @@ class Faebot(commands.Bot):
 
         prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
         logging.info(
-            f"model: {conversation.model}\nsystem_prompt: \n{conversation.system_prompt}\nprompt: \n{prompt}"
+            f"model: {conversation.model}\nsystem_prompt: \n{system_prompt}\nprompt: \n{prompt}"
         )
 
         params = {
@@ -240,20 +240,16 @@ class Faebot(commands.Bot):
             response = await self.generate(
                 model=conversation.model,
                 prompt=prompt,
-                system_prompt=conversation.system_prompt,
+                system_prompt=system_prompt,
                 params=params,
             )
             logging.info(f"received response: {response}")
+            if len(response) > 499:
+                logging.info("generated content exceeded 500 characters, trimming.")
+                response = response[:499] + "–"
             self.permalog(
                 f"generated message:{response}\n------------------------------------------------------------\n\n"
             )
-            await channel.send(response)
-
-        except InvalidContent:
-            logging.info(
-                "generated content exceeded 500 characters, trimming and posting."
-            )
-            response = response[0:499] + "–"
             await channel.send(response)
 
         except Exception as e:
@@ -466,17 +462,11 @@ class Faebot(commands.Bot):
     @commands.command()
     @requires_mod
     async def prompt(self, ctx: commands.Context):
-        """check or change the system prompt in the channel"""
-
-        arguments = ctx.message.content.split(" ")
-        if len(arguments) > 1:
-            self.conversations[ctx.channel.name].system_prompt = " ".join(arguments[1:])
-            return await ctx.send(
-                f"changed system prompt in this channel to {self.conversations[ctx.channel.name].system_prompt}"
-            )
-
+        """display the current system prompt (auto-generated each response from channel info)"""
+        # TODO: Phase 6 — allow mods to set a persistent custom system prompt
         return await ctx.send(
-            f"current system_prompt in this channel is {self.conversations[ctx.channel.name].system_prompt}"
+            "The system prompt is auto-generated each reply from current channel info (game, title, emotes). "
+            "A custom prompt override is planned for a future update."
         )
 
     @commands.command()

@@ -20,7 +20,7 @@
 - [ ] Centralize logging config (currently split across local.py, faebot.py, server.py)
 - [ ] Run Whisper transcription in executor (unblock event loop during transcription)
 - [ ] Retry logic for API calls
-- [ ] Graceful shutdown
+- [ ] Graceful shutdown — currently Ctrl+C produces a TwitchIO `WSConnection._task_callback` traceback; fix is to intercept SIGINT before asyncio cancels tasks and shut down bot + uvicorn in sequence
 - [ ] Basic test suite
 
 ## Phase 4: Database Integration

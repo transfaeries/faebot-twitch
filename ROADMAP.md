@@ -5,23 +5,24 @@
 - [x] Filter to tier 1 + follower emotes only
 - [x] Fix stream category injection
 
-## Phase 2: Voice Integration (Done pending live test)
+## Phase 2: Voice Integration (Done ✓)
 - [x] Combined entry point (FastAPI + TwitchIO in one async process)
 - [x] Feed voice transcriptions into conversation context
 - [x] Friendly error handling and clean shutdown
 - [x] Voice-triggered replies with separate voice frequency
 - [x] Name mentions: always trigger from chat, boost to chat rate from voice
-- [ ] Merge to main + linting pass
-- [ ] Dashboard improvements (interleaved chat + transcriptions, prompt window highlighting)
+- [x] Merged to main
 
 ## Phase 3: Code Quality & Resilience
-- [ ] Linting fixes + type hints
-- [ ] Audit log levels — most current logging.info should be logging.debug; INFO reserved for meaningful events (bot ready, response sent, errors)
+- [x] Linting fixes + type hints (black, flake8, mypy all clean)
+- [ ] Audit log levels — most logging.info → logging.debug; INFO reserved for meaningful events only (bot ready, response sent, errors)
+- [ ] Self-knowledge block — faebot should be able to accurately describe faerself, faer architecture, and faer development when asked
 - [ ] Centralize logging config (currently split across local.py, faebot.py, server.py)
 - [ ] Run Whisper transcription in executor (unblock event loop during transcription)
 - [ ] Retry logic for API calls
 - [ ] Graceful shutdown — currently Ctrl+C produces a TwitchIO `WSConnection._task_callback` traceback; fix is to intercept SIGINT before asyncio cancels tasks and shut down bot + uvicorn in sequence
 - [ ] Basic test suite
+- [ ] Dashboard improvements — reassess after log cleanup; clean logs may give sufficient visibility without the architecture investment
 
 ## Phase 4: Database Integration
 - [ ] PostgreSQL setup with asyncpg (port from Discord bot)

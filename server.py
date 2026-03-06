@@ -7,9 +7,10 @@ from silero_vad import load_silero_vad, VADIterator
 from faster_whisper import WhisperModel
 from os import getenv
 import json
-
 import logging
 import uvicorn
+import numpy as np
+import torch
 
 env = getenv("ENVIRONMENT", "dev").lower()
 if env == "prod":
@@ -22,124 +23,141 @@ logging.basicConfig(
     level=logging_level,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-# Create FastAPI app
-app = FastAPI()
-
-# Load models
-vad_model = load_silero_vad()
-logging.info("VAD model loaded")
-
-whisper_model_name = getenv("WHISPER_MODEL_NAME", "medium")
-whisper_model = WhisperModel(whisper_model_name, device="cuda", compute_type="float16")
-logging.info("Whisper model loaded")
-
-# Set up templates and static files
-BASE_DIR = Path(__file__).parent
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request) -> HTMLResponse:
-    """Render the dashboard page."""
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+def create_app(bot=None):
+    """Create the FastAPI app, optionally with a reference to the Twitch bot."""
+    app = FastAPI()
+    app.state.bot = bot
 
+    # Load models
+    vad_model = load_silero_vad()
+    logging.info("VAD model loaded")
 
-@app.websocket("/ws/audio")
-async def audio_websocket(websocket: WebSocket) -> None:
-    """WebSocket endpoint for receiving audio data and performing VAD."""
-    initial_prompt = "faebot, transfaeries"
-    try:
-        logging.debug("WebSocket handler entered")
-        await websocket.accept()
-        logging.info("Audio WebSocket connected")
+    whisper_model_name = getenv("WHISPER_MODEL_NAME", "medium")
+    whisper_model = WhisperModel(
+        whisper_model_name, device="cuda", compute_type="float16"
+    )
+    logging.info("Whisper model loaded")
 
-        sample_rate = 16000
-        vad_chunk_size = 512  # VADIterator requires 512, 1024, or 1536 samples
+    # Set up templates and static files
+    BASE_DIR = Path(__file__).parent
+    app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+    templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
-        # Create VAD iterator for this connection
-        vad_iterator = VADIterator(
-            model=vad_model,
-            sampling_rate=sample_rate,
-            threshold=0.5,
-            min_silence_duration_ms=500,
-            speech_pad_ms=100,
-        )
+    @app.get("/", response_class=HTMLResponse)
+    async def home(request: Request) -> HTMLResponse:
+        """Render the dashboard page."""
+        return templates.TemplateResponse("dashboard.html", {"request": request})
 
-        audio_buffer = bytearray()
+    @app.websocket("/ws/audio")
+    async def audio_websocket(websocket: WebSocket) -> None:
+        """WebSocket endpoint for receiving audio data and performing VAD."""
+        initial_prompt = "faebot, transfaeries"
+        try:
+            logging.debug("WebSocket handler entered")
+            await websocket.accept()
+            logging.info("Audio WebSocket connected")
 
-        # Speech accumulation
-        is_speaking = False
-        speech_buffer = []  # Will hold audio tensors during speech
+            sample_rate = 16000
+            vad_chunk_size = 512  # VADIterator requires 512, 1024, or 1536 samples
 
-        while True:
-            data = await websocket.receive_bytes()
+            # Create VAD iterator for this connection
+            vad_iterator = VADIterator(
+                model=vad_model,
+                sampling_rate=sample_rate,
+                threshold=0.5,
+                min_silence_duration_ms=500,
+                speech_pad_ms=100,
+            )
 
-            # Keep-alive ping (empty message)
-            if len(data) == 0:
-                logging.debug("Keep-alive ping received")
-                continue
+            audio_buffer = bytearray()
 
-            audio_buffer.extend(data)
+            # Speech accumulation
+            is_speaking = False
+            speech_buffer: list = []  # Will hold audio tensors during speech
 
-            bytes_per_chunk = vad_chunk_size * 2  # 2 bytes per int16 sample
+            while True:
+                data = await websocket.receive_bytes()
 
-            # Process in 512-sample chunks as required by VADIterator
-            while len(audio_buffer) >= bytes_per_chunk:
-                chunk_bytes = bytes(audio_buffer[:bytes_per_chunk])
-                audio_buffer = audio_buffer[bytes_per_chunk:]
+                # Keep-alive ping (empty message)
+                if len(data) == 0:
+                    logging.debug("Keep-alive ping received")
+                    continue
 
-                # Convert to tensor for VAD
-                import numpy as np
-                import torch
+                audio_buffer.extend(data)
 
-                audio_array = np.frombuffer(chunk_bytes, dtype=np.int16)
-                audio_float = audio_array.astype(np.float32) / 32768.0
-                audio_tensor = torch.from_numpy(audio_float)
+                bytes_per_chunk = vad_chunk_size * 2  # 2 bytes per int16 sample
 
-                # Feed to VAD iterator
-                event = vad_iterator(audio_tensor, return_seconds=True)
+                # Process in 512-sample chunks as required by VADIterator
+                while len(audio_buffer) >= bytes_per_chunk:
+                    chunk_bytes = bytes(audio_buffer[:bytes_per_chunk])
+                    audio_buffer = audio_buffer[bytes_per_chunk:]
 
-                if event and "start" in event:
-                    logging.info(f"Speech started at {event['start']:.2f}s")
-                    is_speaking = True
-                    speech_buffer = []
+                    # Convert to tensor for VAD
+                    audio_array = np.frombuffer(chunk_bytes, dtype=np.int16)
+                    audio_float = audio_array.astype(np.float32) / 32768.0
+                    audio_tensor = torch.from_numpy(audio_float)
 
-                if is_speaking:
-                    speech_buffer.append(audio_tensor)
+                    # Feed to VAD iterator
+                    event = vad_iterator(audio_tensor, return_seconds=True)
 
-                if event and "end" in event:
-                    logging.info(f"Speech ended at {event['end']:.2f}s")
-                    is_speaking = False
-
-                    if speech_buffer:
-                        # Concatenate all chunks and transcribe
-                        full_audio = torch.cat(speech_buffer).numpy()
-                        logging.info(
-                            f"Transcribing {len(full_audio) / sample_rate:.1f}s of audio"
-                        )
-
-                        segments, info = whisper_model.transcribe(
-                            full_audio, initial_prompt=initial_prompt
-                        )
-                        text = " ".join(segment.text for segment in segments).strip()
-
-                        # Filter out prompt echoes
-                        if text and text.lower() not in initial_prompt:
-                            logging.info(f"Transcription [{info.language}]: {text}")
-                            await websocket.send_text(
-                                json.dumps({"text": text, "language": info.language})
-                            )
-                        else:
-                            logging.debug(f"Filtered prompt echo: {text}")
-
+                    if event and "start" in event:
+                        logging.info(f"Speech started at {event['start']:.2f}s")
+                        is_speaking = True
                         speech_buffer = []
 
-    except Exception as e:
-        logging.info(f"WebSocket disconnected: {e}")
-    finally:
-        vad_iterator.reset_states()
+                    if is_speaking:
+                        speech_buffer.append(audio_tensor)
+
+                    if event and "end" in event:
+                        logging.info(f"Speech ended at {event['end']:.2f}s")
+                        is_speaking = False
+
+                        if speech_buffer:
+                            # Concatenate all chunks and transcribe
+                            full_audio = torch.cat(speech_buffer).numpy()
+                            logging.info(
+                                f"Transcribing {len(full_audio) / sample_rate:.1f}s of audio"
+                            )
+
+                            segments, info = whisper_model.transcribe(
+                                full_audio, initial_prompt=initial_prompt
+                            )
+                            text = " ".join(
+                                segment.text for segment in segments
+                            ).strip()
+
+                            # Filter out prompt echoes
+                            if text and text.lower() not in initial_prompt:
+                                logging.info(f"Transcription [{info.language}]: {text}")
+                                await websocket.send_text(
+                                    json.dumps(
+                                        {"text": text, "language": info.language}
+                                    )
+                                )
+
+                                # Feed transcription to bot if connected
+                                if app.state.bot:
+                                    streamer = getenv(
+                                        "STREAMER_CHANNEL", "transfaeries"
+                                    )
+                                    await app.state.bot.handle_transcription(
+                                        streamer, text
+                                    )
+                            else:
+                                logging.debug(f"Filtered prompt echo: {text}")
+
+                            speech_buffer = []
+
+        except Exception as e:
+            logging.info(f"WebSocket disconnected: {e}")
+        finally:
+            vad_iterator.reset_states()
+
+    return app
 
 
 if __name__ == "__main__":
+    app = create_app()
     uvicorn.run(app, host="0.0.0.0", port=8000)

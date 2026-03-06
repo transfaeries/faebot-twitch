@@ -1,13 +1,11 @@
-from types import coroutine
 from typing import Optional
-from twitchio import InvalidContent
 from twitchio.ext import commands
 import os
 import aiohttp
 import logging
 import asyncio
 import datetime
-from random import randrange
+from random import randrange, random
 from dataclasses import dataclass, field
 from functools import wraps
 import signal
@@ -32,11 +30,10 @@ class Conversation:
     """for storing conversations"""
 
     channel: str
-    chatlog: list = field(default_factory=list)  # dict[int, Message]
-    conversants: list = field(default_factory=list)
-    system_prompt: str = ""
-    frequency: int = 10
-    history: int = 5
+    chatlog: list = field(default_factory=list)
+    frequency: float = 0.1
+    voice_frequency: float = 0.05
+    history: int = 20
     model: str = MODEL
     silenced: bool = False
 
@@ -45,11 +42,13 @@ class Faebot(commands.Bot):
     def __init__(self):
         # Initialise our Bot with our access token, prefix and a list of channels to join on boot...
         self.conversations: dict[str, Conversation] = {}
-        self.aliases: dict[str, str] = {}  # Store user aliases (username -> alias)
+        self.aliases: dict[str, str] = {
+            "hatsunemikuisbestwaifu": "Miku",
+        }
         self.session: Optional[
             aiohttp.ClientSession
         ] = None  # Add session for HTTP requests
-        self.emotes = list()  # Store emotes for each channel
+        self.emotes: list = []
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -74,11 +73,12 @@ class Faebot(commands.Bot):
                 if users:
                     channel_emotes = await users[0].fetch_channel_emotes()
                     # Only include emotes faebot can actually use (tier 1 and follower)
+                    # TODO: fetch emote usability programmatically (e.g. fetch_user_emotes with faebot's token)
+                    # rather than assuming tier "1000" and type "follower" are always the right filter
                     available = [
                         emote.name
                         for emote in channel_emotes
-                        if emote.tier == "1000"
-                        or emote.type == "follower"
+                        if emote.tier == "1000" or emote.type == "follower"
                     ]
                     self.emotes.extend(available)
                     logging.info(
@@ -91,28 +91,40 @@ class Faebot(commands.Bot):
         else:
             logging.info(f"Total emotes loaded: {self.emotes}")
 
+    def ensure_conversation(self, channel_name: str) -> Conversation:
+        """Get or create a conversation for a channel."""
+        if channel_name not in self.conversations:
+            self.conversations[channel_name] = Conversation(
+                channel=channel_name,
+            )
+            logging.info(f"Created new conversation for {channel_name}")
+        return self.conversations[channel_name]
+
+    async def handle_transcription(self, channel_name: str, text: str):
+        """Handle a voice transcription from the streamer."""
+        conversation = self.ensure_conversation(channel_name)
+        # TODO: apply aliases here — streamer's alias isn't reflected in voice transcriptions
+        conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
+        logging.info(f"Voice transcription added to {channel_name}: {text}")
+
+        if "faebot" in text.lower():
+            logging.info(
+                f"faebot mentioned by streamer, boosting to chat frequency ({conversation.frequency})"
+            )
+            frequency = conversation.frequency
+        else:
+            frequency = conversation.voice_frequency
+        if self.choose_to_reply(channel_name, frequency):
+            asyncio.create_task(self.generate_response(channel_name))
+
     async def event_message(self, message):
         # Messages with echo set to True are messages sent by the bot...
         # For now we just want to ignore them...
         if message.echo:
             return
 
-        # Print the contents of our message to console...
-        channel_info = await self.fetch_channel(message.channel.name)
-        stream_title = channel_info.title if channel_info else "Unknown"
-        game_name = channel_info.game_name if channel_info else "Unknown"
         logging.info(f"received message: {message.author}: {message.content}")
-        logging.info(f"channel object {message.channel.name}")
-        logging.info(f"channel title: {stream_title}")
-        logging.info(f"channel category: {game_name}")
-        if message.channel.name not in self.conversations:
-            self.conversations[message.channel.name] = Conversation(
-                channel=message.channel.name,
-                system_prompt="",  # Will be set dynamically on each message
-            )
-            logging.info(
-                f"added new conversation to Conversations. {self.conversations[message.channel.name].channel}"
-            )
+        self.ensure_conversation(message.channel.name)
 
         # command, execute command if appropriate otherwise return out
         # TODO: change if statement to use prefixes directly
@@ -130,82 +142,72 @@ class Faebot(commands.Bot):
             f"{display_name}: {message.content}"
         )
 
-        if self.choose_to_reply(message):
-            return asyncio.create_task(self.generate_response(message))
-
-    def choose_to_reply(self, message) -> bool:
-        """determine whether faebot replies to a message or not"""
-
-        if self.conversations[message.channel.name].silenced:
-            logging.info(
-                f"faebot is silenced in channel {message.channel.name} faebot won't reply!"
-            )
-            return False
-
+        conversation = self.conversations[message.channel.name]
         if "faebot" in message.content.lower():
-            return True
+            logging.info(f"faebot mentioned by {display_name}, replying")
+            frequency = 1.0
+        else:
+            frequency = conversation.frequency
+        if self.choose_to_reply(message.channel.name, frequency):
+            return asyncio.create_task(self.generate_response(message.channel.name))
 
-        if self.conversations[message.channel.name].frequency == 1:
-            logging.info(
-                f"frequency set to {self.conversations[message.channel.name].frequency} in this channel generating on every message!"
-            )
-            return True
+    def choose_to_reply(self, channel_name: str, frequency: float) -> bool:
+        """Determine whether faebot replies based on frequency. Callers compute the effective frequency."""
+        conversation = self.conversations[channel_name]
 
-        if self.conversations[message.channel.name].frequency < 1:
-            logging.info(
-                f"frequency set to {self.conversations[message.channel.name].frequency}, that's fewer than one faebot will only reply to faer name!"
-            )
+        if conversation.silenced:
+            logging.info(f"faebot is silenced in {channel_name}")
             return False
 
+        if frequency <= 0:
+            logging.info(f"frequency is set to {frequency}, not replying.")
+            return False
+
+        if frequency >= 1:
+            logging.info(f"frequency is set to {frequency}, always replying.")
+            return True
+
+        roll = random()
+        if roll < frequency:
+            logging.info(f"Rolled {roll:.3f} < {frequency}, generating!")
+            return True
         else:
-            chance = randrange(self.conversations[message.channel.name].frequency)
-            if chance == 0:
-                logging.info(f"rolled a {chance} generating!")
-                return True
-            else:
-                logging.info(f"rolled a {chance}, not generating!")
-                return False
+            logging.info(f"Rolled {roll:.3f} >= {frequency}, not generating.")
+            return False
 
     def permalog(self, log_message):
         with open("permalog.txt", "a") as permalog:
             permalog.write(log_message)
 
-    async def generate_response(self, message):
+    async def generate_response(self, channel_name: str):
         """prompt the GenAI API for a message"""
 
-        # Update system prompt with current channel info
-        channel_info = await self.fetch_channel(message.channel.name)
+        conversation = self.conversations[channel_name]
+        channel = self.get_channel(channel_name)
+
+        # Build system prompt with current channel info
+        channel_info = await self.fetch_channel(channel_name)
         stream_title = channel_info.title if channel_info else "Unknown"
         game_name = channel_info.game_name if channel_info else "Unknown"
 
-        self.conversations[message.channel.name].system_prompt = (
+        system_prompt = (
             f"I'm an AI chatbot called faebot. \n"
-            f"I'm hanging out in {message.channel.name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {message.channel.name}, is doing. "
+            f"I'm hanging out in {channel_name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {channel_name}, is doing. "
             f"The streamer is playing {game_name} and the title is {stream_title}\n"
             f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes},"
             f"my favourite is transf23Botlove since it's a picture of me! \n"
             "I make sure my messages are below the character limit of 500 characters. I prioritize replying to the last message and I never ask followup questions."
         )
 
-        if (
-            len(self.conversations[message.channel.name].chatlog)
-            > self.conversations[message.channel.name].history
-        ):
+        if len(conversation.chatlog) > conversation.history:
             logging.info(
-                f"message history has exceeded the set history length of {self.conversations[message.channel.name].history}"
+                f"message history has exceeded the set history length of {conversation.history}"
             )
-            self.conversations[message.channel.name].chatlog = self.conversations[
-                message.channel.name
-            ].chatlog[
-                len(self.conversations[message.channel.name].chatlog)
-                - self.conversations[message.channel.name].history :
-            ]
+            conversation.chatlog = conversation.chatlog[-conversation.history :]
 
-        prompt = (
-            "\n".join(self.conversations[message.channel.name].chatlog) + "\nfaebot:"
-        )
+        prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
         logging.info(
-            f"model: {self.conversations[message.channel.name].model}\nsystem_prompt: \n{self.conversations[message.channel.name].system_prompt}\nprompt: \n{prompt}"
+            f"model: {conversation.model}\nsystem_prompt: \n{system_prompt}\nprompt: \n{prompt}"
         )
 
         params = {
@@ -214,14 +216,13 @@ class Faebot(commands.Bot):
             "top_k": randrange(1, 1024),
             "seed": randrange(1, 1024),
         }
-        # params = {"temperature":1.5, "top_p":0.5, "top_k": 232}
 
         logging.info(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
         )
         current_time = datetime.datetime.now()
         self.permalog(
-            f"generating message in channel {message.channel.name}'s channel at {current_time}\n"
+            f"generating message in channel {channel_name}'s channel at {current_time}\n"
         )
         self.permalog(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
@@ -229,24 +230,19 @@ class Faebot(commands.Bot):
 
         try:
             response = await self.generate(
-                model=self.conversations[message.channel.name].model,
+                model=conversation.model,
                 prompt=prompt,
-                author=message.author.display_name,
-                system_prompt=self.conversations[message.channel.name].system_prompt,
+                system_prompt=system_prompt,
                 params=params,
             )
             logging.info(f"received response: {response}")
+            if len(response) > 499:
+                logging.info("generated content exceeded 500 characters, trimming.")
+                response = response[:499] + "–"
             self.permalog(
                 f"generated message:{response}\n------------------------------------------------------------\n\n"
             )
-            await message.channel.send(response)
-
-        except InvalidContent:
-            logging.info(
-                "generated content exceeded 500 characters, trimming and posting."
-            )
-            response = response[0:499] + "–"
-            await message.channel.send(response)
+            await channel.send(response)
 
         except Exception as e:
             logging.info(
@@ -255,20 +251,22 @@ class Faebot(commands.Bot):
             response = (
                 "Oops, something strange has happened. Please let the developer know!"
             )
-            await message.channel.send(response)
+            await channel.send(response)
 
-        self.conversations[message.channel.name].chatlog.append(f"faebot: {response}")
+        conversation.chatlog.append(f"faebot: {response}")
         return
 
     async def generate(
         self,
         prompt: str = "",
-        author="",
         model=MODEL,
         system_prompt="",
-        params={"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666},
+        params=None,
     ) -> str:
         """generates completions with the OpenRouter API"""
+
+        if params is None:
+            params = {"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666}
 
         if not self.session:
             self.session = aiohttp.ClientSession()
@@ -409,17 +407,27 @@ class Faebot(commands.Bot):
     @commands.command()
     @requires_mod
     async def freq(self, ctx: commands.Context):
-        """check or change message frequency in this channel"""
+        """check or change message frequency in this channel.
+        Usage: fb;freq [chat_freq] [voice_freq]
+        Frequency is 0-1 (e.g. 0.1 = 10% chance to reply)"""
         arguments = ctx.message.content.split(" ")
+        conversation = self.conversations[ctx.channel.name]
         if len(arguments) > 1:
-            if str(arguments[1]).isdigit():
-                self.conversations[ctx.channel.name].frequency = int(arguments[1])
-                return await ctx.send(
-                    f"changed message frequency in this channel to {self.conversations[ctx.channel.name].frequency}"
-                )
+            try:
+                new_freq = float(arguments[1])
+                conversation.frequency = new_freq
+                msg = f"Chat frequency set to {new_freq}"
+                if len(arguments) > 2:
+                    voice_freq = float(arguments[2])
+                    conversation.voice_frequency = voice_freq
+                    msg += f", voice frequency set to {voice_freq}"
+                return await ctx.send(msg)
+            except ValueError:
+                return await ctx.send("Frequency must be a number between 0 and 1")
 
         return await ctx.send(
-            f"current message frequency in this channel is {self.conversations[ctx.channel.name].frequency}"
+            f"Chat frequency: {conversation.frequency}, "
+            f"Voice frequency: {conversation.voice_frequency}"
         )
 
     @commands.command()
@@ -449,17 +457,11 @@ class Faebot(commands.Bot):
     @commands.command()
     @requires_mod
     async def prompt(self, ctx: commands.Context):
-        """check or change the system prompt in the channel"""
-
-        arguments = ctx.message.content.split(" ")
-        if len(arguments) > 1:
-            self.conversations[ctx.channel.name].system_prompt = " ".join(arguments[1:])
-            return await ctx.send(
-                f"changed system prompt in this channel to {self.conversations[ctx.channel.name].system_prompt}"
-            )
-
+        """display the current system prompt (auto-generated each response from channel info)"""
+        # TODO: Phase 6 — allow mods to set a persistent custom system prompt
         return await ctx.send(
-            f"current system_prompt in this channel is {self.conversations[ctx.channel.name].system_prompt}"
+            "The system prompt is auto-generated each reply from current channel info (game, title, emotes). "
+            "A custom prompt override is planned for a future update."
         )
 
     @commands.command()
@@ -481,7 +483,7 @@ class Faebot(commands.Bot):
     # commands for admins ###
 
     @commands.command()
-    async def join(self, ctx: commands.Context, user: str | None) -> coroutine:
+    async def join(self, ctx: commands.Context, user: str | None) -> None:
         """invite faebot to join a channel"""
         if ctx.author.name not in ADMIN:
             return await ctx.send("sorry you need to be an admin to use that command")
@@ -507,5 +509,9 @@ class Faebot(commands.Bot):
         )
 
 
-bot = Faebot()
-bot.run()
+if __name__ == "__main__":
+    if not TWITCH_TOKEN:
+        logging.error("TWITCH_TOKEN not set. Did you forget to source secrets?\n")
+    else:
+        bot = Faebot()
+        bot.run()

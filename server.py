@@ -32,6 +32,7 @@ def create_app(bot=None):
     whisper_model = WhisperModel(
         whisper_model_name, device="cuda", compute_type="float16"
     )
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
     logging.info("Whisper model loaded")
 
     # Set up templates and static files

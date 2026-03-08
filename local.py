@@ -12,9 +12,10 @@ from twitchio.errors import AuthenticationError
 from faebot import Faebot
 from server import create_app
 
+_env = os.getenv("ENVIRONMENT", "dev").lower()
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging.INFO,
+    level=logging.DEBUG if _env != "prod" else logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 

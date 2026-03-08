@@ -105,7 +105,7 @@ class Faebot(commands.Bot):
         conversation = self.ensure_conversation(channel_name)
         # TODO: apply aliases here — streamer's alias isn't reflected in voice transcriptions
         conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
-        logging.info(f"Voice transcription added to {channel_name}: {text}")
+        logging.debug(f"Voice transcription added to {channel_name}: {text}")
 
         if "faebot" in text.lower():
             logging.info(
@@ -123,7 +123,7 @@ class Faebot(commands.Bot):
         if message.echo:
             return
 
-        logging.info(f"received message: {message.author}: {message.content}")
+        logging.debug(f"received message: {message.author}: {message.content}")
         self.ensure_conversation(message.channel.name)
 
         # command, execute command if appropriate otherwise return out
@@ -156,15 +156,15 @@ class Faebot(commands.Bot):
         conversation = self.conversations[channel_name]
 
         if conversation.silenced:
-            logging.info(f"faebot is silenced in {channel_name}")
+            logging.debug(f"faebot is silenced in {channel_name}")
             return False
 
         if frequency <= 0:
-            logging.info(f"frequency is set to {frequency}, not replying.")
+            logging.debug(f"frequency is set to {frequency}, not replying.")
             return False
 
         if frequency >= 1:
-            logging.info(f"frequency is set to {frequency}, always replying.")
+            logging.debug(f"frequency is set to {frequency}, always replying.")
             return True
 
         roll = random()
@@ -172,7 +172,7 @@ class Faebot(commands.Bot):
             logging.info(f"Rolled {roll:.3f} < {frequency}, generating!")
             return True
         else:
-            logging.info(f"Rolled {roll:.3f} >= {frequency}, not generating.")
+            logging.debug(f"Rolled {roll:.3f} >= {frequency}, not generating.")
             return False
 
     def permalog(self, log_message):
@@ -210,13 +210,13 @@ class Faebot(commands.Bot):
         )
 
         if len(conversation.chatlog) > conversation.history:
-            logging.info(
+            logging.debug(
                 f"message history has exceeded the set history length of {conversation.history}"
             )
             conversation.chatlog = conversation.chatlog[-conversation.history :]
 
         prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
-        logging.info(
+        logging.debug(
             f"model: {conversation.model}\nsystem_prompt: \n{system_prompt}\nprompt: \n{prompt}"
         )
 
@@ -227,7 +227,7 @@ class Faebot(commands.Bot):
             "seed": randrange(1, 1024),
         }
 
-        logging.info(
+        logging.debug(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
         )
         current_time = datetime.datetime.now()
@@ -247,7 +247,7 @@ class Faebot(commands.Bot):
             )
             logging.info(f"received response: {response}")
             if len(response) > 499:
-                logging.info("generated content exceeded 500 characters, trimming.")
+                logging.debug("generated content exceeded 500 characters, trimming.")
                 response = response[:499] + "–"
             self.permalog(
                 f"generated message:{response}\n------------------------------------------------------------\n\n"
@@ -255,7 +255,7 @@ class Faebot(commands.Bot):
             await channel.send(response)
 
         except Exception as e:
-            logging.info(
+            logging.error(
                 f"Unknown error has occured, please contact the administrator. Error: {e}"
             )
             response = (

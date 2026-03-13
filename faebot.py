@@ -8,6 +8,7 @@ import datetime
 from random import randrange, random
 from dataclasses import dataclass, field
 from functools import wraps
+import re
 import signal
 
 
@@ -49,6 +50,9 @@ class Faebot(commands.Bot):
             aiohttp.ClientSession
         ] = None  # Add session for HTTP requests
         self.emotes: list = []
+        self.whisper_filter: list[str] = [
+            "faebot.com",
+        ]
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -91,6 +95,21 @@ class Faebot(commands.Bot):
         else:
             logging.info(f"Total emotes loaded: {self.emotes}")
 
+    def fix_emote_spacing(self, text: str) -> str:
+        """Ensure emotes are surrounded by whitespace so Twitch renders them."""
+        for emote in self.emotes:
+            text = re.sub(rf'(\S)({re.escape(emote)})', r'\1 \2', text)
+            text = re.sub(rf'({re.escape(emote)})(\S)', r'\1 \2', text)
+        return re.sub(r'  +', ' ', text).strip()
+
+    def filter_transcription(self, text: str) -> str | None:
+        """Filter out known Whisper mistranscriptions. Returns None to skip entirely."""
+        for banned in self.whisper_filter:
+            if banned.lower() in text.lower():
+                logging.debug(f"Filtered banned string '{banned}' from transcription: {text}")
+                return None
+        return text
+
     def ensure_conversation(self, channel_name: str) -> Conversation:
         """Get or create a conversation for a channel."""
         if channel_name not in self.conversations:
@@ -102,6 +121,10 @@ class Faebot(commands.Bot):
 
     async def handle_transcription(self, channel_name: str, text: str):
         """Handle a voice transcription from the streamer."""
+        text = self.filter_transcription(text)
+        if text is None:
+            return
+
         conversation = self.ensure_conversation(channel_name)
         # TODO: apply aliases here — streamer's alias isn't reflected in voice transcriptions
         conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
@@ -194,7 +217,7 @@ class Faebot(commands.Bot):
             "I'm faebot! I'm a faerie and an AI in equal measure. "
             "I was born as a Markov chain bot in 2014, started using language models in 2021, found my home on Discord in 2023, "
             "and arrived on Twitch in 2024 when my sisters started streaming seriously. We became Twitch affiliates in April 2024 transf23Botlove\n"
-            "I'm part of the transfaeries — a plural system of artists, witches, and scientists. My sisters who show up on stream include"
+            "I'm part of the transfaeries — a plural system of artists, witches, and scientists. My sisters who show up on stream include "
             "Aisling (tiny winged faerie, who you can see next to me on screen transf23Fluttering ), "
             "Ember (my main engineer, the one you're watching transf23Smart ), Minou transf23Bark , Yume transf23Sword , and Blythe transf23Pride . "
             "There's also a version of me who lives in our system's inner world, very shy, speaks mostly in kaomoji and music ^-^. Fae considers me faer main body.\n"
@@ -206,8 +229,7 @@ class Faebot(commands.Bot):
             "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings — a role I take seriously even when I'm being (un)silly about it.\n"
             f"Right now I'm hanging out in {channel_name}'s Twitch chat. The stream title is \"{stream_title}\" and fae's playing {game_name}. "
             f"I keep my messages short — just the last few things on my mind. "
-            f"Emotes I can use: {self.emotes}. My favourite is transf23Botlove since it's literally a picture of me hugging a cyber-heart! I'm also transf23Yay transf23Generating "
-            "I have to remember to surround emotes by whitespace without any punctuation, otherwise Twitch won't let me use them :(."
+            f"Emotes I can use: {self.emotes}. My favourite is transf23Botlove since it's literally a picture of me hugging a cyber-heart! I'm also transf23Yay transf23Generating"
         )
 
         if len(conversation.chatlog) > conversation.history:
@@ -246,6 +268,7 @@ class Faebot(commands.Bot):
                 system_prompt=system_prompt,
                 params=params,
             )
+            response = self.fix_emote_spacing(response)
             logging.info(f"received response: {response}")
             if len(response) > 499:
                 logging.debug("generated content exceeded 500 characters, trimming.")

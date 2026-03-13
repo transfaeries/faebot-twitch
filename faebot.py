@@ -97,15 +97,21 @@ class Faebot(commands.Bot):
 
     def fix_emote_spacing(self, text: str) -> str:
         """Ensure emotes are surrounded by whitespace so Twitch renders them."""
-        # Build one pattern that matches any emote, longest first to avoid
-        # transf23Flutter matching inside transf23Fluttering
+        if not self.emotes:
+            return text
+        # Split text on emote boundaries, longest first so transf23Fluttering
+        # is matched before transf23Flutter (re.split doesn't backtrack like sub)
         sorted_emotes = sorted(self.emotes, key=len, reverse=True)
         pattern = '(' + '|'.join(re.escape(e) for e in sorted_emotes) + ')'
-        # Insert space before emote if preceded by non-whitespace
-        text = re.sub(rf'(\S){pattern}', r'\1 \2', text)
-        # Insert space after emote if followed by non-whitespace
-        text = re.sub(rf'{pattern}(\S)', r'\1 \2', text)
-        return re.sub(r'  +', ' ', text).strip()
+        parts = re.split(pattern, text)
+        # Pad each emote with spaces, then collapse doubles
+        result = []
+        for part in parts:
+            if part in self.emotes:
+                result.append(f' {part} ')
+            else:
+                result.append(part)
+        return re.sub(r'  +', ' ', ''.join(result)).strip()
 
     def filter_transcription(self, text: str) -> str | None:
         """Filter out known Whisper mistranscriptions. Returns None to skip entirely."""

@@ -8,16 +8,19 @@ import asyncio
 import logging
 import os
 import uvicorn
-from twitchio.errors import AuthenticationError
-from faebot import Faebot
-from server import create_app
 
+# Configure logging BEFORE importing faebot/server — their module-level
+# basicConfig calls are no-ops once a handler exists
 _env = os.getenv("ENVIRONMENT", "dev").lower()
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
     level=logging.DEBUG if _env != "prod" else logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+from twitchio.errors import AuthenticationError  # noqa: E402
+from faebot import Faebot  # noqa: E402
+from server import create_app  # noqa: E402
 
 
 async def main():

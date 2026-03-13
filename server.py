@@ -125,7 +125,9 @@ def create_app(bot=None):
 
                             # Filter out prompt echoes
                             if text and text.lower() not in initial_prompt:
-                                logging.debug(f"Transcription [{info.language}]: {text}")
+                                logging.debug(
+                                    f"Transcription [{info.language}]: {text}"
+                                )
                                 await websocket.send_text(
                                     json.dumps(
                                         {"text": text, "language": info.language}

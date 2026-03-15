@@ -102,22 +102,24 @@ class Faebot(commands.Bot):
         # Split text on emote boundaries, longest first so transf23Fluttering
         # is matched before transf23Flutter (re.split doesn't backtrack like sub)
         sorted_emotes = sorted(self.emotes, key=len, reverse=True)
-        pattern = '(' + '|'.join(re.escape(e) for e in sorted_emotes) + ')'
+        pattern = "(" + "|".join(re.escape(e) for e in sorted_emotes) + ")"
         parts = re.split(pattern, text)
         # Pad each emote with spaces, then collapse doubles
         result = []
         for part in parts:
             if part in self.emotes:
-                result.append(f' {part} ')
+                result.append(f" {part} ")
             else:
                 result.append(part)
-        return re.sub(r'  +', ' ', ''.join(result)).strip()
+        return re.sub(r"  +", " ", "".join(result)).strip()
 
     def filter_transcription(self, text: str) -> str | None:
         """Filter out known Whisper mistranscriptions. Returns None to skip entirely."""
         for banned in self.whisper_filter:
             if banned.lower() in text.lower():
-                logging.debug(f"Filtered banned string '{banned}' from transcription: {text}")
+                logging.debug(
+                    f"Filtered banned string '{banned}' from transcription: {text}"
+                )
                 return None
         return text
 
@@ -132,9 +134,10 @@ class Faebot(commands.Bot):
 
     async def handle_transcription(self, channel_name: str, text: str):
         """Handle a voice transcription from the streamer."""
-        text = self.filter_transcription(text)
-        if text is None:
+        filtered = self.filter_transcription(text)
+        if filtered is None:
             return
+        text = filtered
 
         conversation = self.ensure_conversation(channel_name)
         # TODO: apply aliases here — streamer's alias isn't reflected in voice transcriptions

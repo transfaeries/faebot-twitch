@@ -12,15 +12,9 @@ import uvicorn
 import numpy as np
 import torch
 
-env = getenv("ENVIRONMENT", "dev").lower()
-if env == "prod":
-    logging_level = logging.INFO
-else:
-    logging_level = logging.DEBUG
-
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
-    level=logging_level,
+    level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
@@ -38,6 +32,7 @@ def create_app(bot=None):
     whisper_model = WhisperModel(
         whisper_model_name, device="cuda", compute_type="float16"
     )
+    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
     logging.info("Whisper model loaded")
 
     # Set up templates and static files
@@ -103,7 +98,7 @@ def create_app(bot=None):
                     event = vad_iterator(audio_tensor, return_seconds=True)
 
                     if event and "start" in event:
-                        logging.info(f"Speech started at {event['start']:.2f}s")
+                        logging.debug(f"Speech started at {event['start']:.2f}s")
                         is_speaking = True
                         speech_buffer = []
 
@@ -111,13 +106,13 @@ def create_app(bot=None):
                         speech_buffer.append(audio_tensor)
 
                     if event and "end" in event:
-                        logging.info(f"Speech ended at {event['end']:.2f}s")
+                        logging.debug(f"Speech ended at {event['end']:.2f}s")
                         is_speaking = False
 
                         if speech_buffer:
                             # Concatenate all chunks and transcribe
                             full_audio = torch.cat(speech_buffer).numpy()
-                            logging.info(
+                            logging.debug(
                                 f"Transcribing {len(full_audio) / sample_rate:.1f}s of audio"
                             )
 
@@ -130,7 +125,9 @@ def create_app(bot=None):
 
                             # Filter out prompt echoes
                             if text and text.lower() not in initial_prompt:
-                                logging.info(f"Transcription [{info.language}]: {text}")
+                                logging.debug(
+                                    f"Transcription [{info.language}]: {text}"
+                                )
                                 await websocket.send_text(
                                     json.dumps(
                                         {"text": text, "language": info.language}
@@ -151,7 +148,7 @@ def create_app(bot=None):
                             speech_buffer = []
 
         except Exception as e:
-            logging.info(f"WebSocket disconnected: {e}")
+            logging.warning(f"WebSocket disconnected: {e}")
         finally:
             vad_iterator.reset_states()
 

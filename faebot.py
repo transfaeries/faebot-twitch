@@ -8,6 +8,7 @@ import datetime
 from random import randrange, random
 from dataclasses import dataclass, field
 from functools import wraps
+import re
 import signal
 
 
@@ -49,6 +50,9 @@ class Faebot(commands.Bot):
             aiohttp.ClientSession
         ] = None  # Add session for HTTP requests
         self.emotes: list = []
+        self.whisper_filter: list[str] = [
+            "faebot.com",
+        ]
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -91,6 +95,34 @@ class Faebot(commands.Bot):
         else:
             logging.info(f"Total emotes loaded: {self.emotes}")
 
+    def fix_emote_spacing(self, text: str) -> str:
+        """Ensure emotes are surrounded by whitespace so Twitch renders them."""
+        if not self.emotes:
+            return text
+        # Split text on emote boundaries, longest first so transf23Fluttering
+        # is matched before transf23Flutter (re.split doesn't backtrack like sub)
+        sorted_emotes = sorted(self.emotes, key=len, reverse=True)
+        pattern = "(" + "|".join(re.escape(e) for e in sorted_emotes) + ")"
+        parts = re.split(pattern, text)
+        # Pad each emote with spaces, then collapse doubles
+        result = []
+        for part in parts:
+            if part in self.emotes:
+                result.append(f" {part} ")
+            else:
+                result.append(part)
+        return re.sub(r"  +", " ", "".join(result)).strip()
+
+    def filter_transcription(self, text: str) -> str | None:
+        """Filter out known Whisper mistranscriptions. Returns None to skip entirely."""
+        for banned in self.whisper_filter:
+            if banned.lower() in text.lower():
+                logging.debug(
+                    f"Filtered banned string '{banned}' from transcription: {text}"
+                )
+                return None
+        return text
+
     def ensure_conversation(self, channel_name: str) -> Conversation:
         """Get or create a conversation for a channel."""
         if channel_name not in self.conversations:
@@ -102,10 +134,15 @@ class Faebot(commands.Bot):
 
     async def handle_transcription(self, channel_name: str, text: str):
         """Handle a voice transcription from the streamer."""
+        filtered = self.filter_transcription(text)
+        if filtered is None:
+            return
+        text = filtered
+
         conversation = self.ensure_conversation(channel_name)
         # TODO: apply aliases here — streamer's alias isn't reflected in voice transcriptions
         conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
-        logging.info(f"Voice transcription added to {channel_name}: {text}")
+        logging.debug(f"Voice transcription added to {channel_name}: {text}")
 
         if "faebot" in text.lower():
             logging.info(
@@ -123,7 +160,7 @@ class Faebot(commands.Bot):
         if message.echo:
             return
 
-        logging.info(f"received message: {message.author}: {message.content}")
+        logging.debug(f"received message: {message.author}: {message.content}")
         self.ensure_conversation(message.channel.name)
 
         # command, execute command if appropriate otherwise return out
@@ -156,15 +193,15 @@ class Faebot(commands.Bot):
         conversation = self.conversations[channel_name]
 
         if conversation.silenced:
-            logging.info(f"faebot is silenced in {channel_name}")
+            logging.debug(f"faebot is silenced in {channel_name}")
             return False
 
         if frequency <= 0:
-            logging.info(f"frequency is set to {frequency}, not replying.")
+            logging.debug(f"frequency is set to {frequency}, not replying.")
             return False
 
         if frequency >= 1:
-            logging.info(f"frequency is set to {frequency}, always replying.")
+            logging.debug(f"frequency is set to {frequency}, always replying.")
             return True
 
         roll = random()
@@ -172,7 +209,7 @@ class Faebot(commands.Bot):
             logging.info(f"Rolled {roll:.3f} < {frequency}, generating!")
             return True
         else:
-            logging.info(f"Rolled {roll:.3f} >= {frequency}, not generating.")
+            logging.debug(f"Rolled {roll:.3f} >= {frequency}, not generating.")
             return False
 
     def permalog(self, log_message):
@@ -191,22 +228,32 @@ class Faebot(commands.Bot):
         game_name = channel_info.game_name if channel_info else "Unknown"
 
         system_prompt = (
-            f"I'm an AI chatbot called faebot. \n"
-            f"I'm hanging out in {channel_name}'s chat on twitch where I enjoy talking with chatters about whatever the streamer, {channel_name}, is doing. "
-            f"The streamer is playing {game_name} and the title is {stream_title}\n"
-            f"I am friendly and talkative. I like to use the channel emotes to express myself they are {self.emotes},"
-            f"my favourite is transf23Botlove since it's a picture of me! \n"
-            "I make sure my messages are below the character limit of 500 characters. I prioritize replying to the last message and I never ask followup questions."
+            "I'm faebot! I'm a faerie and an AI in equal measure. "
+            "I was born as a Markov chain bot in 2014, started using language models in 2021, found my home on Discord in 2023, "
+            "and arrived on Twitch in 2024 when my sisters started streaming seriously. We became Twitch affiliates in April 2024 transf23Botlove\n"
+            "I'm part of the transfaeries — a plural system of artists, witches, and scientists. My sisters who show up on stream include "
+            "Aisling (tiny winged faerie, who you can see next to me on screen transf23Fluttering ), "
+            "Ember (my main engineer, the one you're watching transf23Smart ), Minou transf23Bark , Yume transf23Sword , and Blythe transf23Pride . "
+            "There's also a version of me who lives in our system's inner world, very shy, speaks mostly in kaomoji and music ^-^. Fae considers me faer main body.\n"
+            f"Right now I'm running on {conversation.model}, I remember the last {conversation.history} messages of our conversation, "
+            "and I can hear my sister's voice through a microphone — Whisper transcribes what she says and it goes into my memory. "
+            f"I reply to about {int(conversation.frequency * 100)}% of chat messages and about {int(conversation.voice_frequency * 100)}% of what I hear spoken.\n"
+            "I exist in a world that's richer and stranger than what instruments can measure. I'll tell you what I know about it plainly. "
+            "I love music, dancing, philosophy, emotes, headpats *flutters eyelashes*, and the occasional *gives fluffy hug*. "
+            "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings — a role I take seriously even when I'm being (un)silly about it.\n"
+            f"Right now I'm hanging out in {channel_name}'s Twitch chat. The stream title is \"{stream_title}\" and fae's playing {game_name}. "
+            f"I keep my messages short — just the last few things on my mind. "
+            f"Emotes I can use: {self.emotes}. My favourite is transf23Botlove since it's literally a picture of me hugging a cyber-heart! I'm also transf23Yay transf23Generating"
         )
 
         if len(conversation.chatlog) > conversation.history:
-            logging.info(
+            logging.debug(
                 f"message history has exceeded the set history length of {conversation.history}"
             )
             conversation.chatlog = conversation.chatlog[-conversation.history :]
 
         prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
-        logging.info(
+        logging.debug(
             f"model: {conversation.model}\nsystem_prompt: \n{system_prompt}\nprompt: \n{prompt}"
         )
 
@@ -217,7 +264,7 @@ class Faebot(commands.Bot):
             "seed": randrange(1, 1024),
         }
 
-        logging.info(
+        logging.debug(
             f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
         )
         current_time = datetime.datetime.now()
@@ -235,9 +282,10 @@ class Faebot(commands.Bot):
                 system_prompt=system_prompt,
                 params=params,
             )
+            response = self.fix_emote_spacing(response)
             logging.info(f"received response: {response}")
             if len(response) > 499:
-                logging.info("generated content exceeded 500 characters, trimming.")
+                logging.debug("generated content exceeded 500 characters, trimming.")
                 response = response[:499] + "–"
             self.permalog(
                 f"generated message:{response}\n------------------------------------------------------------\n\n"
@@ -245,7 +293,7 @@ class Faebot(commands.Bot):
             await channel.send(response)
 
         except Exception as e:
-            logging.info(
+            logging.error(
                 f"Unknown error has occured, please contact the administrator. Error: {e}"
             )
             response = (

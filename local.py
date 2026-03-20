@@ -7,6 +7,7 @@ in a single async process so they can share state.
 import asyncio
 import logging
 import os
+import signal
 import uvicorn
 
 # Configure logging BEFORE importing faebot/server — their module-level
@@ -17,6 +18,8 @@ logging.basicConfig(
     level=logging.DEBUG if _env != "prod" else logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+logging.getLogger("torio").setLevel(logging.WARNING)  # suppress FFmpeg probe noise
 
 from twitchio.errors import AuthenticationError  # noqa: E402
 from faebot import Faebot  # noqa: E402
@@ -36,22 +39,40 @@ async def main():
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
     server = uvicorn.Server(config)
 
+    # Graceful shutdown: intercept signals before asyncio cancels tasks
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler():
+        if not shutdown_event.is_set():
+            logging.info("Shutdown signal received, cleaning up...")
+            shutdown_event.set()
+
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    async def _shutdown_watcher():
+        """Wait for shutdown signal, then stop services in order."""
+        await shutdown_event.wait()
+        logging.info("Stopping uvicorn...")
+        server.should_exit = True
+        logging.info("Closing bot...")
+        await bot.close()
+
     try:
-        # Run both the Twitch bot and the FastAPI server concurrently
         await asyncio.gather(
             bot.start(),
             server.serve(),
+            _shutdown_watcher(),
         )
     except AuthenticationError:
         logging.error("Twitch authentication failed. Your token may be expired.\n")
     except asyncio.CancelledError:
         pass
-    finally:
-        await bot.close()
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("Shutting down faebot.")
+        pass

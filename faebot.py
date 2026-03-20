@@ -325,40 +325,69 @@ class Faebot(commands.Bot):
             {"role": "user", "content": prompt},
         ]
 
-        try:
-            async with self.session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
-                    "HTTP-Referer": os.getenv(
-                        "SITE_URL", "https://github.com/transfaeries/faebot-twitch"
-                    ),
-                    "X-Title": "Faebot Twitch",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": params.get("temperature", 0.7),
-                    "max_tokens": 150,
-                    "top_p": params.get("top_p", 1.0),
-                },
-            ) as response:
-                result = await response.json()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self.session.post(
+                    url="https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
+                        "HTTP-Referer": os.getenv(
+                            "SITE_URL", "https://github.com/transfaeries/faebot-twitch"
+                        ),
+                        "X-Title": "Faebot Twitch",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "temperature": params.get("temperature", 0.7),
+                        "max_tokens": 150,
+                        "top_p": params.get("top_p", 1.0),
+                    },
+                ) as response:
+                    # Retry on transient HTTP errors (429 rate limit, 5xx server errors)
+                    if response.status == 429 or response.status >= 500:
+                        retry_after = min(2 ** attempt, 8)
+                        logging.warning(
+                            f"OpenRouter returned {response.status}, "
+                            f"retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})"
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
 
-                # Extract the assistant's message content
-                if "choices" in result and len(result["choices"]) > 0:
-                    reply = result["choices"][0]["message"]["content"]
-                    return str(reply)
-                else:
-                    logging.error(
-                        f"Unexpected response format from OpenRouter: {result}"
-                    )
-                    return "I couldn't generate a response. Please try again."
+                    # Non-retryable HTTP error (auth failure, bad request, etc.)
+                    if response.status >= 400:
+                        body = await response.text()
+                        logging.error(
+                            f"OpenRouter returned {response.status}: {body}"
+                        )
+                        return "I couldn't generate a response. Please try again."
 
-        except Exception as e:
-            logging.error(f"Error in OpenRouter API call: {e}")
-            raise e  # Re-raise to be handled by the calling method
+                    result = await response.json()
+
+                    # Extract the assistant's message content
+                    if "choices" in result and len(result["choices"]) > 0:
+                        reply = result["choices"][0]["message"]["content"]
+                        return str(reply)
+                    else:
+                        logging.error(
+                            f"Unexpected response format from OpenRouter: {result}"
+                        )
+                        return "I couldn't generate a response. Please try again."
+
+            except (aiohttp.ClientError, ValueError) as e:
+                retry_after = min(2 ** attempt, 8)
+                logging.warning(
+                    f"Network/parse error calling OpenRouter: {e}, "
+                    f"retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})"
+                )
+                await asyncio.sleep(retry_after)
+                continue
+
+        # All retries exhausted
+        logging.error(f"OpenRouter API call failed after {max_retries} attempts")
+        raise Exception(f"OpenRouter API call failed after {max_retries} attempts")
 
     async def close(self):
         """Closes the bot's resources gracefully"""

@@ -1,4 +1,5 @@
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -6,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from silero_vad import load_silero_vad, VADIterator
 from faster_whisper import WhisperModel
 from os import getenv
+import asyncio
 import json
 import logging
 import uvicorn
@@ -17,6 +19,9 @@ logging.basicConfig(
     level=logging.INFO,
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+
+WHISPER_TIMEOUT = int(getenv("WHISPER_TIMEOUT", "30"))
 
 
 def create_app(bot=None):
@@ -34,6 +39,16 @@ def create_app(bot=None):
     )
     logging.getLogger("faster_whisper").setLevel(logging.WARNING)
     logging.info("Whisper model loaded")
+
+    # Single-thread executor for Whisper — keeps transcription off the event loop
+    # while ensuring only one CUDA call runs at a time
+    whisper_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+
+    def _transcribe_sync(audio: np.ndarray, initial_prompt: str):
+        """Run Whisper transcription synchronously (called from executor thread)."""
+        segments, info = whisper_model.transcribe(audio, initial_prompt=initial_prompt)
+        text = " ".join(segment.text for segment in segments).strip()
+        return text, info
 
     # Set up templates and static files
     BASE_DIR = Path(__file__).parent
@@ -112,16 +127,29 @@ def create_app(bot=None):
                         if speech_buffer:
                             # Concatenate all chunks and transcribe
                             full_audio = torch.cat(speech_buffer).numpy()
+                            duration = len(full_audio) / sample_rate
                             logging.debug(
-                                f"Transcribing {len(full_audio) / sample_rate:.1f}s of audio"
+                                f"Transcribing {duration:.1f}s of audio"
                             )
 
-                            segments, info = whisper_model.transcribe(
-                                full_audio, initial_prompt=initial_prompt
-                            )
-                            text = " ".join(
-                                segment.text for segment in segments
-                            ).strip()
+                            try:
+                                loop = asyncio.get_event_loop()
+                                text, info = await asyncio.wait_for(
+                                    loop.run_in_executor(
+                                        whisper_executor,
+                                        _transcribe_sync,
+                                        full_audio,
+                                        initial_prompt,
+                                    ),
+                                    timeout=WHISPER_TIMEOUT,
+                                )
+                            except asyncio.TimeoutError:
+                                logging.error(
+                                    f"Whisper transcription timed out after {WHISPER_TIMEOUT}s "
+                                    f"on {duration:.1f}s of audio — skipping chunk"
+                                )
+                                speech_buffer = []
+                                continue
 
                             # Filter out prompt echoes
                             if text and text.lower() not in initial_prompt:

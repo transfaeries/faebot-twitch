@@ -35,31 +35,41 @@ def create_app(bot=None):
     logging.info("VAD model loaded")
 
     whisper_model_name = getenv("WHISPER_MODEL_NAME", "medium")
-    whisper_model = WhisperModel(
-        whisper_model_name, device="cuda", compute_type="float16"
-    )
-    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
-    logging.info("Whisper model loaded")
+    whisper_device = getenv("WHISPER_DEVICE", "cuda")
+    whisper_compute = getenv("WHISPER_COMPUTE", "float16")
+
+    def _load_whisper():
+        """Load (or reload) the Whisper model."""
+        model = WhisperModel(whisper_model_name, device=whisper_device, compute_type=whisper_compute)
+        logging.getLogger("faster_whisper").setLevel(logging.WARNING)
+        logging.info("Whisper model loaded")
+        return model
+
+    whisper_model = _load_whisper()
 
     # Single-thread executor for Whisper — keeps transcription off the event loop
     # while ensuring only one CUDA call runs at a time
-    whisper_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
-    whisper_state = {"consecutive_timeouts": 0, "executor": whisper_executor}
+    whisper_state = {
+        "consecutive_timeouts": 0,
+        "executor": ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper"),
+        "model": whisper_model,
+    }
     app.state.whisper = whisper_state
 
     def _transcribe_sync(audio: np.ndarray, initial_prompt: str):
         """Run Whisper transcription synchronously (called from executor thread)."""
-        segments, info = whisper_model.transcribe(audio, initial_prompt=initial_prompt)
+        segments, info = whisper_state["model"].transcribe(audio, initial_prompt=initial_prompt)
         text = " ".join(segment.text for segment in segments).strip()
         return text, info
 
-    def _rebuild_executor():
-        """Abandon a stuck executor and create a fresh one."""
+    def _rebuild_whisper():
+        """Abandon a stuck executor and reload the Whisper model."""
         logging.warning(
             f"Whisper timed out {whisper_state['consecutive_timeouts']} times in a row — "
-            "rebuilding executor (stuck thread will be abandoned)"
+            "reloading model and rebuilding executor"
         )
         whisper_state["executor"].shutdown(wait=False)
+        whisper_state["model"] = _load_whisper()
         whisper_state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
         whisper_state["consecutive_timeouts"] = 0
 
@@ -165,7 +175,7 @@ def create_app(bot=None):
                                     f"({whisper_state['consecutive_timeouts']}/{WHISPER_MAX_TIMEOUTS} consecutive)"
                                 )
                                 if whisper_state["consecutive_timeouts"] >= WHISPER_MAX_TIMEOUTS:
-                                    _rebuild_executor()
+                                    _rebuild_whisper()
                                 speech_buffer = []
                                 continue
 

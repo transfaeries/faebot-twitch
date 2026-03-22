@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import signal
+import threading
 import uvicorn
 
 # Configure logging BEFORE importing faebot/server — their module-level
@@ -54,6 +55,16 @@ async def main():
     async def _shutdown_watcher():
         """Wait for shutdown signal, then stop services in order."""
         await shutdown_event.wait()
+
+        # Force exit if graceful shutdown takes too long (stuck CUDA threads)
+        def _force_exit():
+            logging.warning("Graceful shutdown timed out — forcing exit")
+            os._exit(0)
+
+        force_timer = threading.Timer(10, _force_exit)
+        force_timer.daemon = True
+        force_timer.start()
+
         logging.info("Shutting down Whisper executor...")
         whisper_state = getattr(app.state, "whisper", None)
         if whisper_state:
@@ -62,6 +73,8 @@ async def main():
         server.should_exit = True
         logging.info("Closing bot...")
         await bot.close()
+
+        force_timer.cancel()
 
     try:
         await asyncio.gather(

@@ -54,6 +54,10 @@ async def main():
     async def _shutdown_watcher():
         """Wait for shutdown signal, then stop services in order."""
         await shutdown_event.wait()
+        logging.info("Shutting down Whisper executor...")
+        whisper_state = getattr(app.state, "whisper", None)
+        if whisper_state:
+            whisper_state["executor"].shutdown(wait=False)
         logging.info("Stopping uvicorn...")
         server.should_exit = True
         logging.info("Closing bot...")

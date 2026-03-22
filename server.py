@@ -45,6 +45,7 @@ def create_app(bot=None):
     # while ensuring only one CUDA call runs at a time
     whisper_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
     whisper_state = {"consecutive_timeouts": 0, "executor": whisper_executor}
+    app.state.whisper = whisper_state
 
     def _transcribe_sync(audio: np.ndarray, initial_prompt: str):
         """Run Whisper transcription synchronously (called from executor thread)."""

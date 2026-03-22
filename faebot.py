@@ -376,10 +376,10 @@ class Faebot(commands.Bot):
                         )
                         return "I couldn't generate a response. Please try again."
 
-            except (aiohttp.ClientError, ValueError) as e:
+            except (aiohttp.ClientError, ValueError, asyncio.TimeoutError) as e:
                 retry_after = min(2 ** attempt, 8)
                 logging.warning(
-                    f"Network/parse error calling OpenRouter: {e}, "
+                    f"Network/parse error calling OpenRouter: {type(e).__name__}: {e}, "
                     f"retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})"
                 )
                 await asyncio.sleep(retry_after)

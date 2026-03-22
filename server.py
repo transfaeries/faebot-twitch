@@ -22,6 +22,7 @@ logging.basicConfig(
 
 
 WHISPER_TIMEOUT = int(getenv("WHISPER_TIMEOUT", "30"))
+WHISPER_MAX_TIMEOUTS = int(getenv("WHISPER_MAX_TIMEOUTS", "3"))
 
 
 def create_app(bot=None):
@@ -43,12 +44,23 @@ def create_app(bot=None):
     # Single-thread executor for Whisper — keeps transcription off the event loop
     # while ensuring only one CUDA call runs at a time
     whisper_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+    whisper_state = {"consecutive_timeouts": 0, "executor": whisper_executor}
 
     def _transcribe_sync(audio: np.ndarray, initial_prompt: str):
         """Run Whisper transcription synchronously (called from executor thread)."""
         segments, info = whisper_model.transcribe(audio, initial_prompt=initial_prompt)
         text = " ".join(segment.text for segment in segments).strip()
         return text, info
+
+    def _rebuild_executor():
+        """Abandon a stuck executor and create a fresh one."""
+        logging.warning(
+            f"Whisper timed out {whisper_state['consecutive_timeouts']} times in a row — "
+            "rebuilding executor (stuck thread will be abandoned)"
+        )
+        whisper_state["executor"].shutdown(wait=False)
+        whisper_state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+        whisper_state["consecutive_timeouts"] = 0
 
     # Set up templates and static files
     BASE_DIR = Path(__file__).parent
@@ -136,18 +148,23 @@ def create_app(bot=None):
                                 loop = asyncio.get_event_loop()
                                 text, info = await asyncio.wait_for(
                                     loop.run_in_executor(
-                                        whisper_executor,
+                                        whisper_state["executor"],
                                         _transcribe_sync,
                                         full_audio,
                                         initial_prompt,
                                     ),
                                     timeout=WHISPER_TIMEOUT,
                                 )
+                                whisper_state["consecutive_timeouts"] = 0
                             except asyncio.TimeoutError:
+                                whisper_state["consecutive_timeouts"] += 1
                                 logging.error(
                                     f"Whisper transcription timed out after {WHISPER_TIMEOUT}s "
-                                    f"on {duration:.1f}s of audio — skipping chunk"
+                                    f"on {duration:.1f}s of audio — skipping chunk "
+                                    f"({whisper_state['consecutive_timeouts']}/{WHISPER_MAX_TIMEOUTS} consecutive)"
                                 )
+                                if whisper_state["consecutive_timeouts"] >= WHISPER_MAX_TIMEOUTS:
+                                    _rebuild_executor()
                                 speech_buffer = []
                                 continue
 

@@ -59,7 +59,7 @@ async def main():
         # Force exit if graceful shutdown takes too long (stuck CUDA threads)
         def _force_exit():
             logging.warning("Graceful shutdown timed out — forcing exit")
-            os._exit(0)
+            os._exit(1)
 
         force_timer = threading.Timer(10, _force_exit)
         force_timer.daemon = True

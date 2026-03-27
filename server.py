@@ -71,6 +71,7 @@ def create_app(bot=None):
         """Full recovery: new executor + reload the Whisper model (fixes corrupted CUDA state)."""
         logging.warning("Whisper timed out on fresh executor — reloading model")
         whisper_state["executor"].shutdown(wait=False)
+        del whisper_state["model"]
         new_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
         whisper_state["executor"] = new_executor
         loop = asyncio.get_event_loop()
@@ -90,6 +91,9 @@ def create_app(bot=None):
     async def audio_websocket(websocket: WebSocket) -> None:
         """WebSocket endpoint for receiving audio data and performing VAD."""
         initial_prompt = "faebot, transfaeries"
+        # Whisper sometimes echoes back substrings of the prompt instead of real speech.
+        # Substring check is intentional — catches partial echoes like "faebot" or "transfaeries".
+        prompt_echo_source = initial_prompt
         try:
             logging.debug("WebSocket handler entered")
             await websocket.accept()
@@ -185,8 +189,7 @@ def create_app(bot=None):
                                 speech_buffer = []
                                 continue
 
-                            # Filter out prompt echoes
-                            if text and text.lower() not in initial_prompt:
+                            if text and text.lower() not in prompt_echo_source:
                                 logging.debug(
                                     f"Transcription [{info.language}]: {text}"
                                 )

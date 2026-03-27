@@ -9,7 +9,6 @@ from random import randrange, random
 from dataclasses import dataclass, field
 from functools import wraps
 import re
-import signal
 
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
@@ -58,7 +57,6 @@ class Faebot(commands.Bot):
             prefix=["fb;", "fae;"],
             initial_channels=INITIAL_CHANNELS,
         )
-        signal.signal(signal.SIGTERM, lambda s, f: asyncio.create_task(self.close()))
 
     async def event_ready(self):
         # We are logged in and ready to chat and use commands...

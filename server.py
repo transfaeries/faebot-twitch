@@ -22,7 +22,6 @@ logging.basicConfig(
 
 
 WHISPER_TIMEOUT = int(getenv("WHISPER_TIMEOUT", "30"))
-WHISPER_MAX_TIMEOUTS = int(getenv("WHISPER_MAX_TIMEOUTS", "3"))
 
 
 def create_app(bot=None):
@@ -50,7 +49,7 @@ def create_app(bot=None):
     # Single-thread executor for Whisper — keeps transcription off the event loop
     # while ensuring only one CUDA call runs at a time
     whisper_state = {
-        "consecutive_timeouts": 0,
+        "executor_is_fresh": True,
         "executor": ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper"),
         "model": whisper_model,
     }
@@ -62,16 +61,20 @@ def create_app(bot=None):
         text = " ".join(segment.text for segment in segments).strip()
         return text, info
 
-    def _rebuild_whisper():
-        """Abandon a stuck executor and reload the Whisper model."""
-        logging.warning(
-            f"Whisper timed out {whisper_state['consecutive_timeouts']} times in a row — "
-            "reloading model and rebuilding executor"
-        )
+    def _rebuild_executor():
+        """Abandon a stuck executor thread and create a fresh one (keeps the model)."""
+        logging.warning("Whisper executor stuck — replacing with fresh thread")
         whisper_state["executor"].shutdown(wait=False)
-        whisper_state["model"] = _load_whisper()
         whisper_state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
-        whisper_state["consecutive_timeouts"] = 0
+
+    async def _rebuild_whisper():
+        """Full recovery: new executor + reload the Whisper model (fixes corrupted CUDA state)."""
+        logging.warning("Whisper timed out on fresh executor — reloading model")
+        whisper_state["executor"].shutdown(wait=False)
+        new_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+        whisper_state["executor"] = new_executor
+        loop = asyncio.get_event_loop()
+        whisper_state["model"] = await loop.run_in_executor(new_executor, _load_whisper)
 
     # Set up templates and static files
     BASE_DIR = Path(__file__).parent
@@ -166,16 +169,19 @@ def create_app(bot=None):
                                     ),
                                     timeout=WHISPER_TIMEOUT,
                                 )
-                                whisper_state["consecutive_timeouts"] = 0
+                                whisper_state["executor_is_fresh"] = False
                             except asyncio.TimeoutError:
-                                whisper_state["consecutive_timeouts"] += 1
                                 logging.error(
                                     f"Whisper transcription timed out after {WHISPER_TIMEOUT}s "
-                                    f"on {duration:.1f}s of audio — skipping chunk "
-                                    f"({whisper_state['consecutive_timeouts']}/{WHISPER_MAX_TIMEOUTS} consecutive)"
+                                    f"on {duration:.1f}s of audio — skipping chunk"
                                 )
-                                if whisper_state["consecutive_timeouts"] >= WHISPER_MAX_TIMEOUTS:
-                                    _rebuild_whisper()
+                                if whisper_state["executor_is_fresh"]:
+                                    # Fresh executor timed out — CUDA/model is broken
+                                    await _rebuild_whisper()
+                                else:
+                                    # Executor was stuck from a previous timeout — just replace the thread
+                                    _rebuild_executor()
+                                whisper_state["executor_is_fresh"] = True
                                 speech_buffer = []
                                 continue
 

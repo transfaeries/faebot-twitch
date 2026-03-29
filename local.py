@@ -11,7 +11,7 @@ import signal
 import threading
 import uvicorn
 
-# Configure logging BEFORE importing faebot/server — their module-level
+# Configure logging BEFORE importing bot/server — their module-level
 # basicConfig calls are no-ops once a handler exists
 _env = os.getenv("ENVIRONMENT", "dev").lower()
 logging.basicConfig(
@@ -23,7 +23,8 @@ logging.basicConfig(
 logging.getLogger("torio").setLevel(logging.WARNING)  # suppress FFmpeg probe noise
 
 from twitchio.errors import AuthenticationError  # noqa: E402
-from faebot import Faebot  # noqa: E402
+import core  # noqa: E402
+from bot import Faebot  # noqa: E402
 from server import create_app  # noqa: E402
 
 

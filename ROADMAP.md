@@ -18,9 +18,9 @@
 - [x] Audit log levels — most logging.info → logging.debug; INFO reserved for meaningful events only (bot ready, response sent, errors)
 - [x] Self-knowledge block — faebot can accurately describe faerself, faer architecture, history, and live parameters (model, frequencies, history length)
 - [x] Centralize logging config — local.py owns config (ENVIRONMENT-aware); faebot.py and server.py keep simple INFO fallbacks for standalone use
-- [ ] Run Whisper transcription in executor (unblock event loop during transcription)
-- [ ] Retry logic for API calls
-- [ ] Graceful shutdown — currently Ctrl+C produces a TwitchIO `WSConnection._task_callback` traceback; fix is to intercept SIGINT before asyncio cancels tasks and shut down bot + uvicorn in sequence
+- [x] Run Whisper transcription in executor (unblock event loop during transcription)
+- [x] Retry logic for API calls
+- [x] Graceful shutdown — intercept SIGINT/SIGTERM via event loop signal handlers; shut down uvicorn + bot in sequence
 
 ## Phase 4: Architecture Refactor & Dashboard
 The dashboard is blind to generation — can't see what prompt was used or what faebot sent. Fixing this requires splitting `faebot.py` into clean modules first. Full design notes in snippets/architecture-refactor.md (not versioned).

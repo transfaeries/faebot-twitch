@@ -1,4 +1,5 @@
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -6,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from silero_vad import load_silero_vad, VADIterator
 from faster_whisper import WhisperModel
 from os import getenv
+import asyncio
 import json
 import logging
 import uvicorn
@@ -19,6 +21,9 @@ logging.basicConfig(
 )
 
 
+WHISPER_TIMEOUT = int(getenv("WHISPER_TIMEOUT", "30"))
+
+
 def create_app(bot=None):
     """Create the FastAPI app, optionally with a reference to the Twitch bot."""
     app = FastAPI()
@@ -29,11 +34,48 @@ def create_app(bot=None):
     logging.info("VAD model loaded")
 
     whisper_model_name = getenv("WHISPER_MODEL_NAME", "medium")
-    whisper_model = WhisperModel(
-        whisper_model_name, device="cuda", compute_type="float16"
-    )
-    logging.getLogger("faster_whisper").setLevel(logging.WARNING)
-    logging.info("Whisper model loaded")
+    whisper_device = getenv("WHISPER_DEVICE", "cuda")
+    whisper_compute = getenv("WHISPER_COMPUTE", "float16")
+
+    def _load_whisper():
+        """Load (or reload) the Whisper model."""
+        model = WhisperModel(whisper_model_name, device=whisper_device, compute_type=whisper_compute)
+        logging.getLogger("faster_whisper").setLevel(logging.WARNING)
+        logging.info("Whisper model loaded")
+        return model
+
+    whisper_model = _load_whisper()
+
+    # Single-thread executor for Whisper — keeps transcription off the event loop
+    # while ensuring only one CUDA call runs at a time
+    whisper_state = {
+        "executor_is_fresh": True,
+        "executor": ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper"),
+        "model": whisper_model,
+    }
+    app.state.whisper = whisper_state
+
+    def _transcribe_sync(audio: np.ndarray, initial_prompt: str):
+        """Run Whisper transcription synchronously (called from executor thread)."""
+        segments, info = whisper_state["model"].transcribe(audio, initial_prompt=initial_prompt)
+        text = " ".join(segment.text for segment in segments).strip()
+        return text, info
+
+    def _rebuild_executor():
+        """Abandon a stuck executor thread and create a fresh one (keeps the model)."""
+        logging.warning("Whisper executor stuck — replacing with fresh thread")
+        whisper_state["executor"].shutdown(wait=False)
+        whisper_state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+
+    async def _rebuild_whisper():
+        """Full recovery: new executor + reload the Whisper model (fixes corrupted CUDA state)."""
+        logging.warning("Whisper timed out on fresh executor — reloading model")
+        whisper_state["executor"].shutdown(wait=False)
+        del whisper_state["model"]
+        new_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+        whisper_state["executor"] = new_executor
+        loop = asyncio.get_event_loop()
+        whisper_state["model"] = await loop.run_in_executor(new_executor, _load_whisper)
 
     # Set up templates and static files
     BASE_DIR = Path(__file__).parent
@@ -49,6 +91,9 @@ def create_app(bot=None):
     async def audio_websocket(websocket: WebSocket) -> None:
         """WebSocket endpoint for receiving audio data and performing VAD."""
         initial_prompt = "faebot, transfaeries"
+        # Whisper sometimes echoes back substrings of the prompt instead of real speech.
+        # Substring check is intentional — catches partial echoes like "faebot" or "transfaeries".
+        prompt_echo_source = initial_prompt
         try:
             logging.debug("WebSocket handler entered")
             await websocket.accept()
@@ -112,19 +157,39 @@ def create_app(bot=None):
                         if speech_buffer:
                             # Concatenate all chunks and transcribe
                             full_audio = torch.cat(speech_buffer).numpy()
+                            duration = len(full_audio) / sample_rate
                             logging.debug(
-                                f"Transcribing {len(full_audio) / sample_rate:.1f}s of audio"
+                                f"Transcribing {duration:.1f}s of audio"
                             )
 
-                            segments, info = whisper_model.transcribe(
-                                full_audio, initial_prompt=initial_prompt
-                            )
-                            text = " ".join(
-                                segment.text for segment in segments
-                            ).strip()
+                            try:
+                                loop = asyncio.get_event_loop()
+                                text, info = await asyncio.wait_for(
+                                    loop.run_in_executor(
+                                        whisper_state["executor"],
+                                        _transcribe_sync,
+                                        full_audio,
+                                        initial_prompt,
+                                    ),
+                                    timeout=WHISPER_TIMEOUT,
+                                )
+                                whisper_state["executor_is_fresh"] = False
+                            except asyncio.TimeoutError:
+                                logging.error(
+                                    f"Whisper transcription timed out after {WHISPER_TIMEOUT}s "
+                                    f"on {duration:.1f}s of audio — skipping chunk"
+                                )
+                                if whisper_state["executor_is_fresh"]:
+                                    # Fresh executor timed out — CUDA/model is broken
+                                    await _rebuild_whisper()
+                                else:
+                                    # Executor was stuck from a previous timeout — just replace the thread
+                                    _rebuild_executor()
+                                whisper_state["executor_is_fresh"] = True
+                                speech_buffer = []
+                                continue
 
-                            # Filter out prompt echoes
-                            if text and text.lower() not in initial_prompt:
+                            if text and text.lower() not in prompt_echo_source:
                                 logging.debug(
                                     f"Transcription [{info.language}]: {text}"
                                 )

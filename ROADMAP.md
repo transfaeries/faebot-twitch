@@ -23,15 +23,16 @@
 - [x] Graceful shutdown — intercept SIGINT/SIGTERM via event loop signal handlers; shut down uvicorn + bot in sequence
 
 ## Phase 4: Architecture Refactor & Dashboard
-The dashboard is blind to generation — can't see what prompt was used or what faebot sent. Fixing this requires splitting `faebot.py` into clean modules first. Full design notes in snippets/architecture-refactor.md (not versioned).
+The dashboard is blind to generation — can't see what prompt was used or what faebot sent. Fixing this requires splitting the bot into clean modules first.
 
 Do these in order — each step is independently shippable and the bot keeps working throughout:
 
-- [ ] Extract `core.py` — move `Conversation`, `conversations`, `generate_response`, `generate`, `choose_to_reply` out of `faebot.py`. No TwitchIO or FastAPI deps in `core`. Both `faebot.py` and `server.py` import from it. This is the prerequisite for everything else.
-- [ ] Test suite — write against `core.py` now that it has no platform deps. Tests act as a contract for the remaining refactor steps.
+- [x] Extract `core.py` — move `Conversation`, `conversations`, `generate_response`, `generate`, `choose_to_reply` out of `faebot.py` into `core.py`. Rename `faebot.py` to `bot.py`. No TwitchIO or FastAPI deps in `core`. Both `bot.py` and `server.py` import from it.
+- [x] Test suite — 34 tests against `core.py` (96% coverage). Covers conversation management, reply decisions, emote spacing, system prompt, OpenRouter retry logic, and full generation pipeline.
 - [ ] Add event queue — `core.generate_response` puts events (`generating`, `response`, `error`) on an `asyncio.Queue` injected by `local.py`. Both bot and server share the same queue.
 - [ ] Dashboard event WebSocket — `server.py` gains `/ws/events`; drains the queue and pushes to browser. Dashboard renders: generation indicator, response card with collapsible prompt/system prompt inspector.
-- [ ] Extract `commands.py` — move all `fb;`/`fae;` command handlers to a `FaebotCommands` mixin. `Faebot` inherits from both `commands.Bot` and `FaebotCommands`. `faebot.py` becomes thin event wiring only.
+- [ ] Extract `commands.py` — move all `fb;`/`fae;` command handlers to a `FaebotCommands` mixin. `Faebot` inherits from both `commands.Bot` and `FaebotCommands`. `bot.py` becomes thin event wiring only.
+- [ ] Expand test coverage to `bot.py` and `server.py` (TwitchIO/FastAPI mocking)
 
 Note: `core.py` is designed to work cleanly with asyncpg (Phase 5) — conversation management is already async and the dataclass is easy to hydrate from DB rows. For cross-platform shared memory (Phase 7), the DB is the right first bridge; the same PostgreSQL instance lets both Twitch and Discord bots share state without needing to share code.
 

@@ -1,5 +1,6 @@
 snippets/*
 faebot_messages.json
 permalog.txt
-__pycache__/*
+/__pycache__/*
 node_modules/*
+tests/__pycache__/*

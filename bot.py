@@ -56,6 +56,8 @@ class Faebot(commands.Bot):
                 if users:
                     channel_emotes = await users[0].fetch_channel_emotes()
                     # Only include emotes faebot can actually use (tier 1 and follower)
+                    # TODO: fetch emote usability programmatically (e.g. fetch_user_emotes with faebot's token)
+                    # rather than assuming tier "1000" and type "follower" are always the right filter
                     available = [
                         emote.name
                         for emote in channel_emotes

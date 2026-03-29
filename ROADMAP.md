@@ -69,6 +69,7 @@ This is a significant sub-project spanning both Twitch and Discord bots.
 - [ ] Likely after custom model work so voice + personality are coherent
 
 ## Future Emote Improvements
+- Fetch emote usability programmatically (e.g. `fetch_user_emotes` with faebot's token) rather than assuming tier "1000" + type "follower"
 - Emote descriptions so the LLM can choose contextually appropriate emotes
 - Tool-call emote selection based on emotional context
 - Periodic emote refresh for long-running instances

@@ -32,6 +32,8 @@ Do these in order — each step is independently shippable and the bot keeps wor
 - [ ] Add event queue — `core.generate_response` puts events (`generating`, `response`, `error`) on an `asyncio.Queue` injected by `local.py`. Both bot and server share the same queue.
 - [ ] Dashboard event WebSocket — `server.py` gains `/ws/events`; drains the queue and pushes to browser. Dashboard renders: generation indicator, response card with collapsible prompt/system prompt inspector.
 - [ ] Extract `commands.py` — move all `fb;`/`fae;` command handlers to a `FaebotCommands` mixin. `Faebot` inherits from both `commands.Bot` and `FaebotCommands`. `bot.py` becomes thin event wiring only.
+- [ ] Fix Whisper rebuild re-entry bug — guard `_rebuild_whisper` with a lock to prevent concurrent reloads from tearing each other down. Protect transcription path during reload.
+- [ ] Voice activation phrase — configurable phrase the streamer can say to guarantee a generation (bypasses frequency roll)
 - [ ] Expand test coverage to `bot.py` and `server.py` (TwitchIO/FastAPI mocking)
 
 Note: `core.py` is designed to work cleanly with asyncpg (Phase 5) — conversation management is already async and the dataclass is easy to hydrate from DB rows. For cross-platform shared memory (Phase 7), the DB is the right first bridge; the same PostgreSQL instance lets both Twitch and Discord bots share state without needing to share code.

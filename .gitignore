@@ -4,3 +4,4 @@ permalog.txt
 /__pycache__/*
 node_modules/*
 tests/__pycache__/*
+.coverage

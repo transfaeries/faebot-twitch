@@ -44,26 +44,26 @@ Whisper has two-tier self-recovery: if the executor times out on a stale thread,
 ### Everyone
 | Command | Description |
 |---|---|
-| `fb;hello` / `fb;help` | About faebot |
-| `fb;ping <text>` | Pong |
-| `fb;alias <name>` | Set how faebot knows you |
-| `fb;invite` | Ask about adding faebot to your channel |
+| `fae;hello` / `fae;help` | About faebot |
+| `fae;ping <text>` | Pong |
+| `fae;alias <name>` | Set how faebot knows you |
+| `fae;invite` | Ask about adding faebot to your channel |
 
 ### Mods
 | Command | Description |
 |---|---|
-| `fb;freq [chat] [voice]` | Check or set reply frequency (0-1) |
-| `fb;hist [n]` | Check or set conversation history length |
-| `fb;silence` | Toggle faebot's ability to speak |
-| `fb;clear` | Clear faebot's conversation memory |
-| `fb;part` | Ask faebot to leave the channel |
-| `fb;prompt` | Info about the system prompt |
+| `fae;freq [chat] [voice]` | Check or set reply frequency (0-1) |
+| `fae;hist [n]` | Check or set conversation history length |
+| `fae;silence` | Toggle faebot's ability to speak |
+| `fae;clear` | Clear faebot's conversation memory |
+| `fae;part` | Ask faebot to leave the channel |
+| `fae;;prompt` | Info about the system prompt |
 
 ### Admin
 | Command | Description |
 |---|---|
-| `fb;model [name]` | Check or change the generation model |
-| `fb;join <channel>` | Join a new channel |
+| `fae;model [name]` | Check or change the generation model |
+| `fae;join <channel>` | Join a new channel |
 
 ## Running faebot
 

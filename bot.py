@@ -18,6 +18,7 @@ import core
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
 ADMIN = os.getenv("ADMIN", "").split(",")
+VOICE_ACTIVATION = os.getenv("VOICE_ACTIVATION", "faebot dearest").lower()
 
 
 # set up logging
@@ -95,15 +96,20 @@ class Faebot(commands.Bot):
         conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
         logging.debug(f"Voice transcription added to {channel_name}: {text}")
 
-        if "faebot" in text.lower():
+        if VOICE_ACTIVATION in text.lower():
+            logging.info(f"Voice activation phrase detected, generating!")
+            asyncio.create_task(self._generate_and_send(channel_name))
+        elif "faebot" in text.lower():
             logging.info(
                 f"faebot mentioned by streamer, boosting to chat frequency ({conversation.frequency})"
             )
             frequency = conversation.frequency
+            if core.choose_to_reply(channel_name, frequency):
+                asyncio.create_task(self._generate_and_send(channel_name))
         else:
             frequency = conversation.voice_frequency
-        if core.choose_to_reply(channel_name, frequency):
-            asyncio.create_task(self._generate_and_send(channel_name))
+            if core.choose_to_reply(channel_name, frequency):
+                asyncio.create_task(self._generate_and_send(channel_name))
 
     async def _generate_and_send(self, channel_name: str):
         """Fetch channel info, generate a response via core, and send it to chat."""

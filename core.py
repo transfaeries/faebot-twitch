@@ -12,6 +12,7 @@ import asyncio
 import datetime
 import logging
 import re
+import uuid
 
 
 MODEL = os.getenv("MODEL", "google/gemini-2.5-flash")
@@ -135,16 +136,46 @@ def fix_emote_spacing(text: str, emotes: list[str]) -> str:
     return re.sub(r"  +", " ", "".join(result)).strip()
 
 
+def _put_event(queue: Optional[asyncio.Queue], event: dict) -> None:
+    """Post an event to the dashboard queue, dropping the oldest if full.
+
+    Generation must never block waiting for a dashboard — if nothing is draining
+    the queue, we silently discard the oldest events.
+    """
+    if queue is None:
+        return
+    event.setdefault(
+        "timestamp", datetime.datetime.now(datetime.UTC).isoformat()
+    )
+    try:
+        queue.put_nowait(event)
+    except asyncio.QueueFull:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            pass
+
+
 async def generate_response(
     channel_name: str,
     stream_title: str = "Unknown",
     game_name: str = "Unknown",
     emotes: list[str] | None = None,
+    events: Optional[asyncio.Queue] = None,
+    trigger_type: str = "chat",
 ) -> str:
     """Build prompt, call the API, return the response text.
 
     The caller is responsible for sending the response to chat
     and for fetching stream_title/game_name from TwitchIO.
+
+    If `events` is provided, generation lifecycle events (generating, response,
+    error) are posted to it for consumption by the dashboard. All events for a
+    single call share a `generation_id`; `trigger_type` is "chat" or "voice".
     """
     if emotes is None:
         emotes = []
@@ -184,12 +215,37 @@ async def generate_response(
         f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
     )
 
-    response = await generate(
-        model=conversation.model,
-        prompt=prompt,
-        system_prompt=system_prompt,
-        params=params,
-    )
+    generation_id = str(uuid.uuid4())
+    trigger_text = conversation.chatlog[-1] if conversation.chatlog else ""
+
+    _put_event(events, {
+        "type": "generating",
+        "id": generation_id,
+        "channel": channel_name,
+        "trigger_type": trigger_type,
+        "trigger": trigger_text,
+        "model": conversation.model,
+        "prompt": prompt,
+        "system_prompt": system_prompt,
+        "params": params,
+    })
+
+    try:
+        response = await generate(
+            model=conversation.model,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            params=params,
+        )
+    except Exception as e:
+        _put_event(events, {
+            "type": "error",
+            "id": generation_id,
+            "channel": channel_name,
+            "error": f"{type(e).__name__}: {e}",
+        })
+        raise
+
     response = fix_emote_spacing(response, emotes)
     logging.info(f"received response: {response}")
     if len(response) > 499:
@@ -200,6 +256,14 @@ async def generate_response(
     )
 
     conversation.chatlog.append(f"faebot: {response}")
+
+    _put_event(events, {
+        "type": "response",
+        "id": generation_id,
+        "channel": channel_name,
+        "text": response,
+    })
+
     return response
 
 

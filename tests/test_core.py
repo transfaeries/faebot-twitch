@@ -1,5 +1,6 @@
 """Tests for core.py — faebot's brain, no platform dependencies needed."""
 
+import asyncio
 import pytest
 from unittest.mock import patch
 from aioresponses import aioresponses as aioresponses_ctx
@@ -304,4 +305,155 @@ class TestGenerateResponse:
             )
             await core.generate_response("testchannel")
         assert mock_permalog.call_count >= 2  # params + response
+        await core.close_session()
+
+
+# ── event queue ──────────────────────────────────────────────────────
+
+
+def _drain_queue(queue: asyncio.Queue) -> list[dict]:
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    return events
+
+
+class TestEventQueue:
+    @pytest.mark.asyncio
+    async def test_no_queue_is_backwards_compatible(self, conversation):
+        """Omitting the events queue should not change behaviour."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "hi"}}]},
+            )
+            result = await core.generate_response("testchannel")
+        assert result == "hi"
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_generating_and_response_events_posted(self, conversation):
+        queue: asyncio.Queue = asyncio.Queue()
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "hi there"}}]},
+            )
+            await core.generate_response("testchannel", events=queue)
+        events = _drain_queue(queue)
+        types = [e["type"] for e in events]
+        assert types == ["generating", "response"]
+        assert events[0]["channel"] == "testchannel"
+        assert events[0]["model"] == conversation.model
+        assert "prompt" in events[0]
+        assert "system_prompt" in events[0]
+        assert events[1]["text"] == "hi there"
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_error_event_on_failure(self, conversation):
+        queue: asyncio.Queue = asyncio.Queue()
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=500,
+                payload={"error": "server error"},
+                repeat=True,
+            )
+            with pytest.raises(Exception, match="failed after 3 attempts"):
+                await core.generate_response("testchannel", events=queue)
+        events = _drain_queue(queue)
+        types = [e["type"] for e in events]
+        assert types == ["generating", "error"]
+        assert "error" in events[1]
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_events_carry_timestamp(self, conversation):
+        queue: asyncio.Queue = asyncio.Queue()
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "hi"}}]},
+            )
+            await core.generate_response("testchannel", events=queue)
+        events = _drain_queue(queue)
+        for e in events:
+            assert "timestamp" in e
+        await core.close_session()
+
+    def test_put_event_drops_oldest_when_full(self):
+        queue: asyncio.Queue = asyncio.Queue(maxsize=2)
+        core._put_event(queue, {"type": "a"})
+        core._put_event(queue, {"type": "b"})
+        core._put_event(queue, {"type": "c"})  # should evict "a"
+        events = _drain_queue(queue)
+        types = [e["type"] for e in events]
+        assert types == ["b", "c"]
+
+    def test_put_event_none_queue_is_noop(self):
+        core._put_event(None, {"type": "whatever"})  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_events_share_generation_id(self, conversation):
+        queue: asyncio.Queue = asyncio.Queue()
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "hi"}}]},
+            )
+            await core.generate_response("testchannel", events=queue)
+        events = _drain_queue(queue)
+        ids = {e["id"] for e in events}
+        assert len(ids) == 1
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_error_shares_generation_id(self, conversation):
+        queue: asyncio.Queue = asyncio.Queue()
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=500,
+                payload={"error": "server error"},
+                repeat=True,
+            )
+            with pytest.raises(Exception):
+                await core.generate_response("testchannel", events=queue)
+        events = _drain_queue(queue)
+        ids = {e["id"] for e in events}
+        assert len(ids) == 1
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_trigger_type_and_text_on_generating(self, conversation):
+        queue: asyncio.Queue = asyncio.Queue()
+        conversation.chatlog.append("alice: hey faebot")
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "hi"}}]},
+            )
+            await core.generate_response(
+                "testchannel", events=queue, trigger_type="voice"
+            )
+        events = _drain_queue(queue)
+        gen = next(e for e in events if e["type"] == "generating")
+        assert gen["trigger_type"] == "voice"
+        assert gen["trigger"] == "alice: hey faebot"
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_timestamps_are_utc(self, conversation):
+        queue: asyncio.Queue = asyncio.Queue()
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "hi"}}]},
+            )
+            await core.generate_response("testchannel", events=queue)
+        events = _drain_queue(queue)
+        for e in events:
+            # UTC isoformat ends with +00:00
+            assert e["timestamp"].endswith("+00:00")
         await core.close_session()

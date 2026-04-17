@@ -144,9 +144,7 @@ def _put_event(queue: Optional[asyncio.Queue], event: dict) -> None:
     """
     if queue is None:
         return
-    event.setdefault(
-        "timestamp", datetime.datetime.now(datetime.UTC).isoformat()
-    )
+    event.setdefault("timestamp", datetime.datetime.now(datetime.UTC).isoformat())
     try:
         queue.put_nowait(event)
     except asyncio.QueueFull:
@@ -190,7 +188,7 @@ async def generate_response(
         logging.debug(
             f"message history has exceeded the set history length of {conversation.history}"
         )
-        conversation.chatlog = conversation.chatlog[-conversation.history:]
+        conversation.chatlog = conversation.chatlog[-conversation.history :]
 
     prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
     logging.debug(
@@ -218,17 +216,20 @@ async def generate_response(
     generation_id = str(uuid.uuid4())
     trigger_text = conversation.chatlog[-1] if conversation.chatlog else ""
 
-    _put_event(events, {
-        "type": "generating",
-        "id": generation_id,
-        "channel": channel_name,
-        "trigger_type": trigger_type,
-        "trigger": trigger_text,
-        "model": conversation.model,
-        "prompt": prompt,
-        "system_prompt": system_prompt,
-        "params": params,
-    })
+    _put_event(
+        events,
+        {
+            "type": "generating",
+            "id": generation_id,
+            "channel": channel_name,
+            "trigger_type": trigger_type,
+            "trigger": trigger_text,
+            "model": conversation.model,
+            "prompt": prompt,
+            "system_prompt": system_prompt,
+            "params": params,
+        },
+    )
 
     try:
         response = await generate(
@@ -238,12 +239,15 @@ async def generate_response(
             params=params,
         )
     except Exception as e:
-        _put_event(events, {
-            "type": "error",
-            "id": generation_id,
-            "channel": channel_name,
-            "error": f"{type(e).__name__}: {e}",
-        })
+        _put_event(
+            events,
+            {
+                "type": "error",
+                "id": generation_id,
+                "channel": channel_name,
+                "error": f"{type(e).__name__}: {e}",
+            },
+        )
         raise
 
     response = fix_emote_spacing(response, emotes)
@@ -257,12 +261,15 @@ async def generate_response(
 
     conversation.chatlog.append(f"faebot: {response}")
 
-    _put_event(events, {
-        "type": "response",
-        "id": generation_id,
-        "channel": channel_name,
-        "text": response,
-    })
+    _put_event(
+        events,
+        {
+            "type": "response",
+            "id": generation_id,
+            "channel": channel_name,
+            "text": response,
+        },
+    )
 
     return response
 
@@ -317,9 +324,7 @@ async def generate(
 
                 if response.status >= 400:
                     body = await response.text()
-                    logging.error(
-                        f"OpenRouter returned {response.status}: {body}"
-                    )
+                    logging.error(f"OpenRouter returned {response.status}: {body}")
                     return "I couldn't generate a response. Please try again."
 
                 result = await response.json()

@@ -34,8 +34,12 @@ async def main():
         logging.error("TWITCH_TOKEN not set. Did you forget to source secrets?\n")
         return
 
-    bot = Faebot()
-    app = create_app(bot=bot)
+    # Shared event queue: core.generate_response writes generation events,
+    # server.py's /ws/events drains them to connected dashboards.
+    events: asyncio.Queue = asyncio.Queue(maxsize=256)
+
+    bot = Faebot(event_queue=events)
+    app = create_app(bot=bot, events=events)
 
     # Configure uvicorn to run without blocking
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")

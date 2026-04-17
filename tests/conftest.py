@@ -29,6 +29,7 @@ def mock_openrouter():
 @pytest.fixture
 def openrouter_success(mock_openrouter):
     """Mock a successful OpenRouter API response."""
+
     def _mock(text="hello from faebot!"):
         mock_openrouter.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -36,12 +37,14 @@ def openrouter_success(mock_openrouter):
                 "choices": [{"message": {"content": text}}],
             },
         )
+
     return _mock
 
 
 @pytest.fixture
 def openrouter_error(mock_openrouter):
     """Mock an OpenRouter error response."""
+
     def _mock(status=500, repeat=False):
         mock_openrouter.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -49,4 +52,5 @@ def openrouter_error(mock_openrouter):
             payload={"error": "something went wrong"},
             repeat=repeat,
         )
+
     return _mock

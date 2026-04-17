@@ -27,8 +27,9 @@ logging.basicConfig(
 
 
 class Faebot(commands.Bot, FaebotCommands):
-    def __init__(self):
+    def __init__(self, event_queue: asyncio.Queue | None = None):
         self.emotes: list = []
+        self.event_queue = event_queue
         self.whisper_filter: list[str] = [
             "faebot.com",
         ]
@@ -96,20 +97,26 @@ class Faebot(commands.Bot, FaebotCommands):
         text_normalized = re.sub(r"[^\w\s]", "", text.lower())
         if VOICE_ACTIVATION in text_normalized:
             logging.info(f"Voice activation phrase detected, generating!")
-            asyncio.create_task(self._generate_and_send(channel_name))
+            asyncio.create_task(
+                self._generate_and_send(channel_name, trigger_type="voice")
+            )
         elif "faebot" in text.lower():
             logging.info(
                 f"faebot mentioned by streamer, boosting to chat frequency ({conversation.frequency})"
             )
             frequency = conversation.frequency
             if core.choose_to_reply(channel_name, frequency):
-                asyncio.create_task(self._generate_and_send(channel_name))
+                asyncio.create_task(
+                    self._generate_and_send(channel_name, trigger_type="voice")
+                )
         else:
             frequency = conversation.voice_frequency
             if core.choose_to_reply(channel_name, frequency):
-                asyncio.create_task(self._generate_and_send(channel_name))
+                asyncio.create_task(
+                    self._generate_and_send(channel_name, trigger_type="voice")
+                )
 
-    async def _generate_and_send(self, channel_name: str):
+    async def _generate_and_send(self, channel_name: str, trigger_type: str = "chat"):
         """Fetch channel info, generate a response via core, and send it to chat."""
         channel = self.get_channel(channel_name)
 
@@ -123,6 +130,8 @@ class Faebot(commands.Bot, FaebotCommands):
                 stream_title=stream_title,
                 game_name=game_name,
                 emotes=self.emotes,
+                events=self.event_queue,
+                trigger_type=trigger_type,
             )
             await channel.send(response)
         except Exception as e:
@@ -159,12 +168,15 @@ class Faebot(commands.Bot, FaebotCommands):
         else:
             frequency = conversation.frequency
         if core.choose_to_reply(message.channel.name, frequency):
-            return asyncio.create_task(self._generate_and_send(message.channel.name))
+            return asyncio.create_task(
+                self._generate_and_send(message.channel.name, trigger_type="chat")
+            )
 
     async def close(self):
         """Close the bot's resources gracefully."""
         await core.close_session()
         await super().close()
+
 
 if __name__ == "__main__":
     if not TWITCH_TOKEN:

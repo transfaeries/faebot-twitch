@@ -84,9 +84,7 @@ class TestFixEmoteSpacing:
 
     def test_multiple_emotes(self):
         emotes = ["transf23Yay", "transf23Botlove"]
-        result = core.fix_emote_spacing(
-            "transf23Yayhello transf23Botlove", emotes
-        )
+        result = core.fix_emote_spacing("transf23Yayhello transf23Botlove", emotes)
         assert "transf23Yay" in result
         assert "transf23Botlove" in result
         # Each emote should be space-separated from surrounding text
@@ -99,9 +97,7 @@ class TestFixEmoteSpacing:
         assert result == "transf23Fluttering"
 
     def test_no_double_spaces(self):
-        result = core.fix_emote_spacing(
-            " transf23Yay  transf23Yay ", ["transf23Yay"]
-        )
+        result = core.fix_emote_spacing(" transf23Yay  transf23Yay ", ["transf23Yay"])
         assert "  " not in result
 
 
@@ -140,7 +136,10 @@ class TestBuildSystemPrompt:
 
     def test_includes_emotes(self, conversation):
         prompt = core.build_system_prompt(
-            conversation, "testchannel", "Title", "Game",
+            conversation,
+            "testchannel",
+            "Title",
+            "Game",
             ["transf23Botlove", "transf23Yay"],
         )
         assert "transf23Botlove" in prompt
@@ -161,9 +160,7 @@ class TestGenerate:
     @pytest.mark.asyncio
     async def test_successful_generation(self, openrouter_success):
         openrouter_success("test response")
-        result = await core.generate(
-            prompt="hello", system_prompt="you are faebot"
-        )
+        result = await core.generate(prompt="hello", system_prompt="you are faebot")
         assert result == "test response"
         await core.close_session()
 
@@ -283,15 +280,9 @@ class TestGenerateResponse:
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                payload={
-                    "choices": [
-                        {"message": {"content": "hitransf23Botlovebye"}}
-                    ]
-                },
+                payload={"choices": [{"message": {"content": "hitransf23Botlovebye"}}]},
             )
-            result = await core.generate_response(
-                "testchannel", emotes=emotes
-            )
+            result = await core.generate_response("testchannel", emotes=emotes)
         assert result == "hi transf23Botlove bye"
         await core.close_session()
 

@@ -24,10 +24,15 @@ logging.basicConfig(
 WHISPER_TIMEOUT = int(getenv("WHISPER_TIMEOUT", "30"))
 
 
-def create_app(bot=None):
-    """Create the FastAPI app, optionally with a reference to the Twitch bot."""
+def create_app(bot=None, events: asyncio.Queue | None = None):
+    """Create the FastAPI app, optionally with a reference to the Twitch bot.
+
+    `events` is the shared generation event queue; the upcoming /ws/events
+    endpoint will drain it and broadcast to connected dashboards.
+    """
     app = FastAPI()
     app.state.bot = bot
+    app.state.events = events
 
     # Load models
     vad_model = load_silero_vad()
@@ -39,7 +44,9 @@ def create_app(bot=None):
 
     def _load_whisper():
         """Load (or reload) the Whisper model."""
-        model = WhisperModel(whisper_model_name, device=whisper_device, compute_type=whisper_compute)
+        model = WhisperModel(
+            whisper_model_name, device=whisper_device, compute_type=whisper_compute
+        )
         logging.getLogger("faster_whisper").setLevel(logging.WARNING)
         logging.info("Whisper model loaded")
         return model
@@ -69,7 +76,9 @@ def create_app(bot=None):
         """Abandon a stuck executor thread and create a fresh one (keeps the model)."""
         logging.warning("Whisper executor stuck — replacing with fresh thread")
         whisper_state["executor"].shutdown(wait=False)
-        whisper_state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+        whisper_state["executor"] = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="whisper"
+        )
 
     async def _rebuild_whisper():
         """Full recovery: new executor + reload the Whisper model (fixes corrupted CUDA state).
@@ -85,10 +94,14 @@ def create_app(bot=None):
             logging.warning("Whisper timed out on fresh executor — reloading model")
             whisper_state["executor"].shutdown(wait=False)
             whisper_state["model"] = None
-            new_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+            new_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="whisper"
+            )
             whisper_state["executor"] = new_executor
             loop = asyncio.get_event_loop()
-            whisper_state["model"] = await loop.run_in_executor(new_executor, _load_whisper)
+            whisper_state["model"] = await loop.run_in_executor(
+                new_executor, _load_whisper
+            )
         except Exception as e:
             logging.error(f"Whisper rebuild failed: {e}")
         finally:
@@ -174,16 +187,16 @@ def create_app(bot=None):
                         if speech_buffer:
                             # Skip transcription while Whisper is rebuilding
                             if whisper_state["rebuilding"]:
-                                logging.debug("Whisper rebuilding — dropping audio chunk")
+                                logging.debug(
+                                    "Whisper rebuilding — dropping audio chunk"
+                                )
                                 speech_buffer = []
                                 continue
 
                             # Concatenate all chunks and transcribe
                             full_audio = torch.cat(speech_buffer).numpy()
                             duration = len(full_audio) / sample_rate
-                            logging.debug(
-                                f"Transcribing {duration:.1f}s of audio"
-                            )
+                            logging.debug(f"Transcribing {duration:.1f}s of audio")
 
                             try:
                                 loop = asyncio.get_event_loop()

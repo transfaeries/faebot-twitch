@@ -169,9 +169,7 @@ class FaebotCommands:
         else:
             reply = "oki, I'll be quiet. 🤐"
         conversation.silenced = not conversation.silenced
-        logging.info(
-            f"faebot silent status toggled to {conversation.silenced}"
-        )
+        logging.info(f"faebot silent status toggled to {conversation.silenced}")
         return await ctx.send(reply)
 
     # --- commands for admins ---

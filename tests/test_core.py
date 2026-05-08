@@ -323,7 +323,9 @@ class TestEventQueue:
         await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_generating_and_response_events_posted(self, conversation):
+    async def test_generating_event_posted(self, conversation):
+        """core only emits `generating` (and `error` on failure). The caller emits
+        `response` after a successful Twitch send — see bot._generate_and_send."""
         queue: asyncio.Queue = asyncio.Queue()
         with aioresponses_ctx() as mocked:
             mocked.post(
@@ -333,12 +335,11 @@ class TestEventQueue:
             await core.generate_response("testchannel", events=queue)
         events = _drain_queue(queue)
         types = [e["type"] for e in events]
-        assert types == ["generating", "response"]
+        assert types == ["generating"]
         assert events[0]["channel"] == "testchannel"
         assert events[0]["model"] == conversation.model
         assert "prompt" in events[0]
         assert "system_prompt" in events[0]
-        assert events[1]["text"] == "hi there"
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -375,28 +376,30 @@ class TestEventQueue:
 
     def test_put_event_drops_oldest_when_full(self):
         queue: asyncio.Queue = asyncio.Queue(maxsize=2)
-        core._put_event(queue, {"type": "a"})
-        core._put_event(queue, {"type": "b"})
-        core._put_event(queue, {"type": "c"})  # should evict "a"
+        core.put_event(queue, {"type": "a"})
+        core.put_event(queue, {"type": "b"})
+        core.put_event(queue, {"type": "c"})  # should evict "a"
         events = _drain_queue(queue)
         types = [e["type"] for e in events]
         assert types == ["b", "c"]
 
     def test_put_event_none_queue_is_noop(self):
-        core._put_event(None, {"type": "whatever"})  # should not raise
+        core.put_event(None, {"type": "whatever"})  # should not raise
 
     @pytest.mark.asyncio
-    async def test_events_share_generation_id(self, conversation):
+    async def test_caller_provided_generation_id_is_used(self, conversation):
+        """When the caller passes a generation_id, the generating event uses it."""
         queue: asyncio.Queue = asyncio.Queue()
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 payload={"choices": [{"message": {"content": "hi"}}]},
             )
-            await core.generate_response("testchannel", events=queue)
+            await core.generate_response(
+                "testchannel", events=queue, generation_id="abc-123"
+            )
         events = _drain_queue(queue)
-        ids = {e["id"] for e in events}
-        assert len(ids) == 1
+        assert events[0]["id"] == "abc-123"
         await core.close_session()
 
     @pytest.mark.asyncio

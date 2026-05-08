@@ -136,11 +136,15 @@ def fix_emote_spacing(text: str, emotes: list[str]) -> str:
     return re.sub(r"  +", " ", "".join(result)).strip()
 
 
-def _put_event(queue: Optional[asyncio.Queue], event: dict) -> None:
+def put_event(queue: Optional[asyncio.Queue], event: dict) -> None:
     """Post an event to the dashboard queue, dropping the oldest if full.
 
     Generation must never block waiting for a dashboard — if nothing is draining
-    the queue, we silently discard the oldest events.
+    the queue, we silently discard the oldest events. Stamps a UTC timestamp
+    if the caller hasn't already.
+
+    Public so bot.py can emit `response` and send-failure `error` events using
+    the same drop-oldest contract — those events live downstream of generation.
     """
     if queue is None:
         return
@@ -165,15 +169,19 @@ async def generate_response(
     emotes: list[str] | None = None,
     events: Optional[asyncio.Queue] = None,
     trigger_type: str = "chat",
+    generation_id: Optional[str] = None,
 ) -> str:
     """Build prompt, call the API, return the response text.
 
     The caller is responsible for sending the response to chat
     and for fetching stream_title/game_name from TwitchIO.
 
-    If `events` is provided, generation lifecycle events (generating, response,
-    error) are posted to it for consumption by the dashboard. All events for a
-    single call share a `generation_id`; `trigger_type` is "chat" or "voice".
+    If `events` is provided, this emits `generating` and (on API failure)
+    `error` events. The `response` event is NOT emitted here — the caller
+    must emit it after successfully delivering the message, so the dashboard
+    reflects what actually reached chat. Pass `generation_id` so the caller's
+    follow-up event correlates with the generating event; if omitted, one is
+    generated and the caller has no way to correlate.
     """
     if emotes is None:
         emotes = []
@@ -213,10 +221,11 @@ async def generate_response(
         f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
     )
 
-    generation_id = str(uuid.uuid4())
+    if generation_id is None:
+        generation_id = str(uuid.uuid4())
     trigger_text = conversation.chatlog[-1] if conversation.chatlog else ""
 
-    _put_event(
+    put_event(
         events,
         {
             "type": "generating",
@@ -239,7 +248,7 @@ async def generate_response(
             params=params,
         )
     except Exception as e:
-        _put_event(
+        put_event(
             events,
             {
                 "type": "error",
@@ -260,16 +269,6 @@ async def generate_response(
     )
 
     conversation.chatlog.append(f"faebot: {response}")
-
-    _put_event(
-        events,
-        {
-            "type": "response",
-            "id": generation_id,
-            "channel": channel_name,
-            "text": response,
-        },
-    )
 
     return response
 

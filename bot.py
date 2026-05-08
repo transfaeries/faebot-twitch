@@ -8,6 +8,7 @@ import os
 import logging
 import asyncio
 import re
+import uuid
 
 import core
 from commands import FaebotCommands
@@ -117,13 +118,19 @@ class Faebot(commands.Bot, FaebotCommands):
                 )
 
     async def _generate_and_send(self, channel_name: str, trigger_type: str = "chat"):
-        """Fetch channel info, generate a response via core, and send it to chat."""
+        """Fetch channel info, generate a response via core, and send it to chat.
+
+        The dashboard's `response` event is emitted only after Twitch acknowledges
+        the send. If Twitch rejects (e.g. rate limit), we emit an `error` event
+        with the same generation_id so the card flips red instead of green.
+        """
         channel = self.get_channel(channel_name)
 
         channel_info = await self.fetch_channel(channel_name)
         stream_title = channel_info.title if channel_info else "Unknown"
         game_name = channel_info.game_name if channel_info else "Unknown"
 
+        generation_id = str(uuid.uuid4())
         try:
             response = await core.generate_response(
                 channel_name=channel_name,
@@ -132,15 +139,43 @@ class Faebot(commands.Bot, FaebotCommands):
                 emotes=self.emotes,
                 events=self.event_queue,
                 trigger_type=trigger_type,
+                generation_id=generation_id,
             )
+        except Exception as e:
+            # core has already emitted an `error` event for this generation
+            logging.error(f"Generation failed: {e}")
+            try:
+                await channel.send(
+                    "Oops, something strange has happened. Please let the developer know!"
+                )
+            except Exception as fallback_e:
+                logging.error(f"Failed to send fallback message too: {fallback_e}")
+            return
+
+        try:
             await channel.send(response)
         except Exception as e:
-            logging.error(
-                f"Unknown error has occured, please contact the administrator. Error: {e}"
+            logging.error(f"Failed to send message to Twitch: {e}")
+            core.put_event(
+                self.event_queue,
+                {
+                    "type": "error",
+                    "id": generation_id,
+                    "channel": channel_name,
+                    "error": f"twitch send failed: {type(e).__name__}: {e}",
+                },
             )
-            await channel.send(
-                "Oops, something strange has happened. Please let the developer know!"
-            )
+            return
+
+        core.put_event(
+            self.event_queue,
+            {
+                "type": "response",
+                "id": generation_id,
+                "channel": channel_name,
+                "text": response,
+            },
+        )
 
     async def event_message(self, message):
         if message.echo:

@@ -167,6 +167,14 @@ class Faebot(commands.Bot, FaebotCommands):
             )
             return
 
+        # NOTE: this is optimistic. `channel.send` returning means TwitchIO
+        # successfully transmitted the IRC PRIVMSG, NOT that Twitch delivered
+        # it. Twitch can still reject the message via an async NOTICE
+        # (msg_ratelimit, msg_duplicate, msg_slowmode, etc.) which we don't
+        # currently catch — in those cases the card turns green here even
+        # though the message never reached chat. Future work: wire up
+        # event_notice and correlate to the most recent send per channel.
+        # See ROADMAP "Twitch NOTICE handling".
         core.put_event(
             self.event_queue,
             {

@@ -1,6 +1,21 @@
 // Faebot Dashboard - Audio Capture
 // Step 1: Microphone access and visualization
 
+// Whisper emits ISO 639-1 codes; the browser's Intl.DisplayNames turns those
+// into the user's localized full name. Falls back to the raw code if the
+// browser can't resolve it (very old browsers or unknown codes).
+const LANGUAGE_DISPLAY = new Intl.DisplayNames([navigator.language || 'en'], {
+    type: 'language',
+});
+
+function languageName(code) {
+    try {
+        return LANGUAGE_DISPLAY.of(code) || code;
+    } catch {
+        return code;
+    }
+}
+
 class AudioCapture {
     constructor() {
         this.startBtn = document.getElementById('startBtn');
@@ -208,17 +223,22 @@ class AudioCapture {
             const text = data.text;
             const language = data.language;
             console.log('Transcription:', text, `[${language}]`);
-            
+
             const log = document.getElementById('transcriptionLog');
             const empty = log.querySelector('.log-empty');
             if (empty) empty.remove();
-            
+
             const entry = document.createElement('div');
             entry.className = 'log-entry';
             entry.innerHTML = `
-                <div class="time">${new Date().toLocaleTimeString()} [${language}]</div>
-                <div class="text">${text}</div>
+                <div class="time"></div>
+                <div class="text"></div>
             `;
+            // textContent for untrusted strings — Whisper output isn't user-typed,
+            // but it can contain HTML chars if someone happens to say them.
+            entry.querySelector('.time').textContent =
+                `${new Date().toLocaleTimeString()} [${languageName(language)}]`;
+            entry.querySelector('.text').textContent = text;
             log.appendChild(entry);
             log.scrollTop = log.scrollHeight;
         };

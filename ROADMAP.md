@@ -29,8 +29,9 @@ Do these in order — each step is independently shippable and the bot keeps wor
 
 - [x] Extract `core.py` — move `Conversation`, `conversations`, `generate_response`, `generate`, `choose_to_reply` out of `faebot.py` into `core.py`. Rename `faebot.py` to `bot.py`. No TwitchIO or FastAPI deps in `core`. Both `bot.py` and `server.py` import from it.
 - [x] Test suite — 34 tests against `core.py` (96% coverage). Covers conversation management, reply decisions, emote spacing, system prompt, OpenRouter retry logic, and full generation pipeline.
-- [ ] Add event queue — `core.generate_response` puts events (`generating`, `response`, `error`) on an `asyncio.Queue` injected by `local.py`. Both bot and server share the same queue.
-- [ ] Dashboard event WebSocket — `server.py` gains `/ws/events`; drains the queue and pushes to browser. Dashboard renders: generation indicator, response card with collapsible prompt/system prompt inspector.
+- [x] Add event queue — `core.generate_response` puts events (`generating`, `response`, `error`) on an `asyncio.Queue` injected by `local.py`. Each call shares a `generation_id` (uuid4), carries `trigger_type` (`"chat"` or `"voice"`) and UTC timestamps. Bot and server share the same queue.
+- [x] Server-side `/ws/events` — background drain task pulls from the queue, appends to a `deque(maxlen=50)` ring buffer, and fans out to connected clients. Endpoint replays the ring buffer on connect so refresh preserves context. Drain runs regardless of who's watching (verified live with `websocat`).
+- [ ] Dashboard UI — two-pane layout (transcripts + generations), generation cards with collapsible prompt/system prompt inspector, language code → full name on transcripts.
 - [x] Extract `commands.py` — moved all `fb;`/`fae;` command handlers to a `FaebotCommands` mixin. `Faebot` inherits from both `commands.Bot` and `FaebotCommands`. `bot.py` is now thin event wiring only.
 - [x] Fix Whisper rebuild re-entry bug — guarded `_rebuild_whisper` with a `rebuilding` flag; transcription path skips chunks during reload. Prevents concurrent reloads from tearing each other down.
 - [x] Voice activation phrase — configurable phrase (default: "faebot dearest") the streamer can say to guarantee a generation. Strips punctuation for Whisper compatibility.

@@ -13,6 +13,7 @@
     /* Status colors */
     --color-success: #4ade80;
     --color-error: #f87171;
+    --color-pending: #facc15;
     
     /* Spacing */
     --space-sm: 0.5rem;
@@ -238,4 +239,90 @@ header h1 {
 
 .log-entry .text {
     margin-top: var(--space-sm);
+}
+
+/* Generation cards */
+.gen-card {
+    padding: var(--space-sm);
+    margin-bottom: var(--space-sm);
+    background: var(--bg-deep);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--color-success);
+    cursor: pointer;
+}
+
+.gen-card.pending {
+    border-left-color: var(--color-pending);
+}
+
+.gen-card.error {
+    border-left-color: var(--color-error);
+}
+
+.gen-header {
+    display: flex;
+    gap: var(--space-sm);
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--color-secondary-dim);
+}
+
+.gen-trigger {
+    margin-top: var(--space-sm);
+    color: var(--color-secondary-dim);
+    font-style: italic;
+    word-break: break-word;
+}
+
+.gen-response {
+    margin-top: var(--space-sm);
+    word-break: break-word;
+}
+
+.gen-pending {
+    color: var(--color-pending);
+    font-style: italic;
+}
+
+.gen-card.error .gen-response {
+    color: var(--color-error);
+}
+
+.gen-details {
+    margin-top: var(--space-md);
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--bg-surface);
+    font-size: 0.8rem;
+}
+
+.gen-details[hidden] {
+    display: none;
+}
+
+.gen-details h3 {
+    color: var(--color-secondary-dim);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: var(--space-md);
+    margin-bottom: var(--space-sm);
+}
+
+.gen-details h3:first-child {
+    margin-top: 0;
+}
+
+.gen-details pre {
+    background: var(--bg-surface);
+    padding: var(--space-sm);
+    border-radius: var(--radius);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.75rem;
+}
+
+.gen-meta {
+    color: var(--color-secondary-dim);
+    font-size: 0.75rem;
 }

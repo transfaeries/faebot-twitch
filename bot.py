@@ -155,7 +155,10 @@ class Faebot(commands.Bot, FaebotCommands):
         try:
             await channel.send(response)
         except Exception as e:
-            logging.error(f"Failed to send message to Twitch: {e}")
+            logging.warning(
+                f"Twitch IRC send failed (likely connection lost): "
+                f"{type(e).__name__}: {e}"
+            )
             core.put_event(
                 self.event_queue,
                 {

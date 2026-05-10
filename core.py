@@ -24,8 +24,8 @@ class Conversation:
 
     channel: str
     chatlog: list = field(default_factory=list)
-    frequency: float = 0.1
-    voice_frequency: float = 0.05
+    frequency: float = 0.05
+    voice_frequency: float = 0.025
     history: int = 20
     model: str = MODEL
     silenced: bool = False

@@ -155,8 +155,7 @@ class FaebotCommands:
     async def prompt(self, ctx: commands.Context):
         """Display the current system prompt."""
         return await ctx.send(
-            "The system prompt is auto-generated each reply from current channel info (game, title, emotes). "
-            "A custom prompt override is planned for a future update."
+            "The system prompt is auto-generated each reply from current channel info (game, title, emotes)."
         )
 
     @commands.command()

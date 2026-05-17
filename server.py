@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse
@@ -24,10 +25,51 @@ logging.basicConfig(
 WHISPER_TIMEOUT = int(getenv("WHISPER_TIMEOUT", "30"))
 
 
-def create_app(bot=None):
-    """Create the FastAPI app, optionally with a reference to the Twitch bot."""
+def create_app(bot=None, events: asyncio.Queue | None = None):
+    """Create the FastAPI app, optionally with a reference to the Twitch bot.
+
+    `events` is the shared generation event queue; the upcoming /ws/events
+    endpoint will drain it and broadcast to connected dashboards.
+    """
     app = FastAPI()
     app.state.bot = bot
+    app.state.events = events
+
+    # Dashboard event plumbing: a single drain task pulls from the generation
+    # queue into a ring buffer and fans out to connected /ws/events clients.
+    # The drain runs regardless of whether any clients are connected — the bot
+    # must behave identically whether anyone is watching.
+    event_clients: set[WebSocket] = set()
+    event_history: deque = deque(maxlen=50)
+    app.state.event_clients = event_clients
+    app.state.event_history = event_history
+
+    async def _drain_events() -> None:
+        assert events is not None
+        while True:
+            try:
+                event = await events.get()
+            except asyncio.CancelledError:
+                return
+            event_history.append(event)
+            for ws in list(event_clients):
+                try:
+                    await ws.send_json(event)
+                except Exception as e:
+                    logging.debug(f"Dropping dead event client: {e}")
+                    event_clients.discard(ws)
+
+    if events is not None:
+        @app.on_event("startup")
+        async def _start_drain() -> None:
+            app.state.drain_task = asyncio.create_task(_drain_events())
+            logging.info("Event drain task started")
+
+        @app.on_event("shutdown")
+        async def _stop_drain() -> None:
+            task = getattr(app.state, "drain_task", None)
+            if task:
+                task.cancel()
 
     # Load models
     vad_model = load_silero_vad()
@@ -39,7 +81,9 @@ def create_app(bot=None):
 
     def _load_whisper():
         """Load (or reload) the Whisper model."""
-        model = WhisperModel(whisper_model_name, device=whisper_device, compute_type=whisper_compute)
+        model = WhisperModel(
+            whisper_model_name, device=whisper_device, compute_type=whisper_compute
+        )
         logging.getLogger("faster_whisper").setLevel(logging.WARNING)
         logging.info("Whisper model loaded")
         return model
@@ -50,6 +94,7 @@ def create_app(bot=None):
     # while ensuring only one CUDA call runs at a time
     whisper_state = {
         "executor_is_fresh": True,
+        "rebuilding": False,
         "executor": ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper"),
         "model": whisper_model,
     }
@@ -57,7 +102,10 @@ def create_app(bot=None):
 
     def _transcribe_sync(audio: np.ndarray, initial_prompt: str):
         """Run Whisper transcription synchronously (called from executor thread)."""
-        segments, info = whisper_state["model"].transcribe(audio, initial_prompt=initial_prompt)
+        model = whisper_state.get("model")
+        if model is None:
+            raise RuntimeError("Whisper model not loaded")
+        segments, info = model.transcribe(audio, initial_prompt=initial_prompt)
         text = " ".join(segment.text for segment in segments).strip()
         return text, info
 
@@ -65,17 +113,36 @@ def create_app(bot=None):
         """Abandon a stuck executor thread and create a fresh one (keeps the model)."""
         logging.warning("Whisper executor stuck — replacing with fresh thread")
         whisper_state["executor"].shutdown(wait=False)
-        whisper_state["executor"] = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
+        whisper_state["executor"] = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="whisper"
+        )
 
     async def _rebuild_whisper():
-        """Full recovery: new executor + reload the Whisper model (fixes corrupted CUDA state)."""
-        logging.warning("Whisper timed out on fresh executor — reloading model")
-        whisper_state["executor"].shutdown(wait=False)
-        del whisper_state["model"]
-        new_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper")
-        whisper_state["executor"] = new_executor
-        loop = asyncio.get_event_loop()
-        whisper_state["model"] = await loop.run_in_executor(new_executor, _load_whisper)
+        """Full recovery: new executor + reload the Whisper model (fixes corrupted CUDA state).
+
+        Guarded against re-entry — if a rebuild is already in progress,
+        subsequent calls are no-ops. Transcription is skipped while rebuilding.
+        """
+        if whisper_state["rebuilding"]:
+            logging.warning("Whisper rebuild already in progress — skipping")
+            return
+        whisper_state["rebuilding"] = True
+        try:
+            logging.warning("Whisper timed out on fresh executor — reloading model")
+            whisper_state["executor"].shutdown(wait=False)
+            whisper_state["model"] = None
+            new_executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="whisper"
+            )
+            whisper_state["executor"] = new_executor
+            loop = asyncio.get_event_loop()
+            whisper_state["model"] = await loop.run_in_executor(
+                new_executor, _load_whisper
+            )
+        except Exception as e:
+            logging.error(f"Whisper rebuild failed: {e}")
+        finally:
+            whisper_state["rebuilding"] = False
 
     # Set up templates and static files
     BASE_DIR = Path(__file__).parent
@@ -86,6 +153,31 @@ def create_app(bot=None):
     async def home(request: Request) -> HTMLResponse:
         """Render the dashboard page."""
         return templates.TemplateResponse("dashboard.html", {"request": request})
+
+    @app.websocket("/ws/events")
+    async def events_websocket(websocket: WebSocket) -> None:
+        """Broadcast generation events to connected dashboards.
+
+        On connect, replays the ring buffer so a refresh preserves context;
+        after that, new events arrive live from the drain task.
+        """
+        await websocket.accept()
+        logging.info("Events WebSocket connected")
+        for event in list(event_history):
+            try:
+                await websocket.send_json(event)
+            except Exception:
+                return
+        event_clients.add(websocket)
+        try:
+            while True:
+                # We don't expect messages from the client — this just parks
+                # the coroutine until the client disconnects.
+                await websocket.receive_text()
+        except Exception as e:
+            logging.debug(f"Events WebSocket disconnected: {e}")
+        finally:
+            event_clients.discard(websocket)
 
     @app.websocket("/ws/audio")
     async def audio_websocket(websocket: WebSocket) -> None:
@@ -155,12 +247,18 @@ def create_app(bot=None):
                         is_speaking = False
 
                         if speech_buffer:
+                            # Skip transcription while Whisper is rebuilding
+                            if whisper_state["rebuilding"]:
+                                logging.debug(
+                                    "Whisper rebuilding — dropping audio chunk"
+                                )
+                                speech_buffer = []
+                                continue
+
                             # Concatenate all chunks and transcribe
                             full_audio = torch.cat(speech_buffer).numpy()
                             duration = len(full_audio) / sample_rate
-                            logging.debug(
-                                f"Transcribing {duration:.1f}s of audio"
-                            )
+                            logging.debug(f"Transcribing {duration:.1f}s of audio")
 
                             try:
                                 loop = asyncio.get_event_loop()

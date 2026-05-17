@@ -1,5 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Testing / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Type checking
+.mypy_cache/
+
+# Environment / secrets
+.env
+*.env
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Node (dashboard deps)
+node_modules/
+
+# Project-specific
 snippets/*
 faebot_messages.json
 permalog.txt
-__pycache__/*
-node_modules/*

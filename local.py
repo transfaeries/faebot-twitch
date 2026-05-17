@@ -11,7 +11,7 @@ import signal
 import threading
 import uvicorn
 
-# Configure logging BEFORE importing faebot/server — their module-level
+# Configure logging BEFORE importing bot/server — their module-level
 # basicConfig calls are no-ops once a handler exists
 _env = os.getenv("ENVIRONMENT", "dev").lower()
 logging.basicConfig(
@@ -23,7 +23,8 @@ logging.basicConfig(
 logging.getLogger("torio").setLevel(logging.WARNING)  # suppress FFmpeg probe noise
 
 from twitchio.errors import AuthenticationError  # noqa: E402
-from faebot import Faebot  # noqa: E402
+import core  # noqa: E402
+from bot import Faebot  # noqa: E402
 from server import create_app  # noqa: E402
 
 
@@ -33,8 +34,12 @@ async def main():
         logging.error("TWITCH_TOKEN not set. Did you forget to source secrets?\n")
         return
 
-    bot = Faebot()
-    app = create_app(bot=bot)
+    # Shared event queue: core.generate_response writes generation events,
+    # server.py's /ws/events drains them to connected dashboards.
+    events: asyncio.Queue = asyncio.Queue(maxsize=256)
+
+    bot = Faebot(event_queue=events)
+    app = create_app(bot=bot, events=events)
 
     # Configure uvicorn to run without blocking
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")

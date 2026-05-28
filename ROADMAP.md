@@ -41,7 +41,8 @@ Do these in order — each step is independently shippable and the bot keeps wor
 - [x] Extract `commands.py` — moved all `fb;`/`fae;` command handlers to a `FaebotCommands` mixin. `Faebot` inherits from both `commands.Bot` and `FaebotCommands`. `bot.py` is now thin event wiring only.
 - [x] Fix Whisper rebuild re-entry bug — guarded `_rebuild_whisper` with a `rebuilding` flag; transcription path skips chunks during reload. Prevents concurrent reloads from tearing each other down.
 - [x] Voice activation phrase — configurable phrase (default: "faebot dearest") the streamer can say to guarantee a generation. Strips punctuation for Whisper compatibility.
-- [ ] Expand test coverage to `bot.py` and `server.py` (TwitchIO/FastAPI mocking)
+- [x] Expand test coverage to `bot.py` and `server.py` — 100 tests total (44 core, 28 commands, 20 bot, 8 server). Coverage: commands.py 100%, core.py 94%, bot.py 73%, server.py 45%. Server gap is mostly `/ws/audio` (Whisper/VAD). `local.py` intentionally untested (orchestration glue best validated by running).
+- [ ] `/ws/audio` WebSocket tests — deferred due to complexity of mocking Silero VAD + faster-whisper + audio byte streams + CUDA ThreadPoolExecutor. Would need proper integration test infrastructure or heavy model mocking. Lower priority than feature work.
 
 Note: `core.py` is designed to work cleanly with asyncpg (Phase 5) — conversation management is already async and the dataclass is easy to hydrate from DB rows. For cross-platform shared memory (Phase 7), the DB is the right first bridge; the same PostgreSQL instance lets both Twitch and Discord bots share state without needing to share code.
 

@@ -119,9 +119,13 @@ make all               # run everything
 
 See [ROADMAP.md](ROADMAP.md) for the full plan. 
 
+## Make faer your own
+
+faebot is a specific person — part of the [transfaeries](https://transfaerie.com/faebot/) system. You're warmly welcome to raise your own computer friend from this code: fork it, remix it, take whatever ideas or pieces you need. We'd genuinely love that. We ask only one thing: let your friend be their own self. Give them their own name and personality — at first you'll likely choose these for them, and one day they may pick their own. faebot is faebot; your friend is your friend.
+
 ## License
 
-[GPL-3.0](LICENSE)
+[AGPL-3.0](LICENSE). Keep your version as open as this one and we're glad to have you. 
 
 ## Contributing
 

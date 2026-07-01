@@ -220,6 +220,12 @@ class Faebot(commands.Bot, FaebotCommands):
 
     async def event_message(self, message):
         if message.echo:
+            # Spike 01 capture — Twitch's native view of faebot's own line (echo).
+            # The reply loop is (correctly) short-circuited on echoes, but we still
+            # record it so faebot's utterance also has Twitch-native metadata (real
+            # message-id, tags) alongside the richer send-point record_faebot_message.
+            # Two faithful views of one act (echo=True marks it); reconcile offline.
+            capture.record_chat(message)
             return
 
         logging.debug(f"received message: {message.author}: {message.content}")

@@ -11,6 +11,7 @@ import re
 import uuid
 
 import core
+import capture
 from commands import FaebotCommands
 
 
@@ -46,6 +47,17 @@ class Faebot(commands.Bot, FaebotCommands):
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
+
+    async def event_raw_data(self, data):
+        """Spike 01 capture — faithful catch-all. Every raw IRC line TwitchIO
+        receives is recorded (minus PING/PONG), so nothing we didn't anticipate
+        can slip past. Interpretation happens offline. No-op unless capture is on."""
+        capture.record_raw(data)
+
+    async def event_raw_usernotice(self, channel, tags):
+        """Spike 01 capture — subs, resubs, gift subs, raids, announcements. These
+        stream events are invisible to current faebot; here we record them raw."""
+        capture.record_usernotice(channel, tags)
 
     async def fetch_emotes(self):
         """Fetch channel emotes for all joined channels from the Twitch API."""
@@ -84,12 +96,22 @@ class Faebot(commands.Bot, FaebotCommands):
                 return None
         return text
 
-    async def handle_transcription(self, channel_name: str, text: str):
-        """Handle a voice transcription from the streamer."""
+    async def handle_transcription(
+        self, channel_name: str, text: str, **whisper_meta
+    ):
+        """Handle a voice transcription from the streamer.
+
+        `whisper_meta` (language, language_probability, duration…) is optional and
+        used only for spike capture — a modality=voice Observation with real
+        metadata. It does not affect generation, so callers may omit it.
+        """
         filtered = self.filter_transcription(text)
         if filtered is None:
             return
         text = filtered
+
+        # Spike 01 capture — the streamer's voice (modality=voice), with Whisper meta.
+        capture.record_voice(channel_name, text, **whisper_meta)
 
         conversation = core.ensure_conversation(channel_name)
         conversation.chatlog.append(f"[streamer voice] {channel_name}: {text}")
@@ -178,6 +200,14 @@ class Faebot(commands.Bot, FaebotCommands):
         # though the message never reached chat. Future work: wire up
         # event_notice and correlate to the most recent send per channel.
         # See ROADMAP "Twitch NOTICE handling".
+        # Spike 01 capture — faebot's own utterance perceived back into the stream.
+        capture.record_faebot_message(
+            channel_name,
+            response,
+            generation_id=generation_id,
+            trigger_type=trigger_type,
+        )
+
         core.put_event(
             self.event_queue,
             {
@@ -193,6 +223,12 @@ class Faebot(commands.Bot, FaebotCommands):
             return
 
         logging.debug(f"received message: {message.author}: {message.content}")
+
+        # Spike 01 capture tap — faithful, opt-in, never interferes (capture.py).
+        # Record every non-echo message verbatim (commands included); the offline
+        # transducer decides what matters.
+        capture.record_chat(message)
+
         core.ensure_conversation(message.channel.name)
 
         if (

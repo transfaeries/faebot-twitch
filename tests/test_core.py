@@ -27,7 +27,7 @@ class TestEnsureConversation:
     def test_defaults(self):
         conv = core.ensure_conversation("defaults")
         assert conv.frequency == 0.05
-        assert conv.voice_frequency == 0.015
+        assert conv.voice_frequency == 0.025
         assert conv.history == 20
         assert conv.silenced is False
         assert conv.chatlog == []

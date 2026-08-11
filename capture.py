@@ -58,7 +58,9 @@ def record(kind: str, **fields) -> None:
         }
         os.makedirs(CAPTURE_DIR, exist_ok=True)
         with open(_capture_path(), "a", encoding="utf-8") as capture_file:
-            capture_file.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+            capture_file.write(
+                json.dumps(event, ensure_ascii=False, default=str) + "\n"
+            )
     except Exception as error:
         # Capture must never disturb the bot — log and move on.
         logging.debug(f"spike capture failed ({kind}): {type(error).__name__}: {error}")
@@ -104,7 +106,9 @@ def record_usernotice(channel, tags) -> None:
             tags=tags,
         )
     except Exception as error:
-        logging.debug(f"spike capture_usernotice failed: {type(error).__name__}: {error}")
+        logging.debug(
+            f"spike capture_usernotice failed: {type(error).__name__}: {error}"
+        )
 
 
 def record_voice(channel_name: str, text: str, **whisper_meta) -> None:
@@ -121,7 +125,8 @@ def record_voice(channel_name: str, text: str, **whisper_meta) -> None:
 
 def record_faebot_message(channel_name: str, text: str, **meta) -> None:
     """Record faebot's own outgoing message — faer Action perceived back into the
-    stream (the domain-model loop's hard case: 'faer own past Action perceived back')."""
+    stream (the domain-model loop's hard case: 'faer own past Action perceived back').
+    """
     if not CAPTURE_DIR:
         return
     try:

@@ -1,5 +1,7 @@
 """
-Spike 01 (faebot-core) — Twitch capture tap.
+The Twitch capture tap.
+
+(Born as faebot-core spike 01, graduated to main 2026-08.)
 
 A *thin, faithful, opt-in, maximalist* recorder that appends raw stream events to
 a date-stamped JSONL so we can transduce them into faebot-core `Observation`s
@@ -8,18 +10,24 @@ record everything the surface gives us, reason about none of it here —
 reconciliation is faebot's cognition, not the adapter's.
 
 Design rules (load-bearing — this runs inside the LIVE bot on stream):
-  * **Opt-in.** Capture happens only when SPIKE_CAPTURE_DIR is set. Unset = no-op,
+  * **Opt-in.** Capture happens only when TWITCH_CAPTURE_DIR is set. Unset = no-op,
     so the live bot is completely unaffected unless we deliberately turn it on.
     (Recommended: point it at faebot-private's scratch, alongside the Discord data,
-    e.g. SPIKE_CAPTURE_DIR=../scratch/spike01)
+    e.g. TWITCH_CAPTURE_DIR=../scratch/captures)
   * **Never breaks the bot.** Every extraction + write is wrapped; failures are
     swallowed and logged at debug. Capturing a conversation must never break it.
   * **Faithful & maximalist.** We record raw fields verbatim, drop nothing, and
-    interpret nothing. Unanticipated input is captured as-is (see record_raw) so
+    interpret nothing — with one named exception: voice is captured downstream
+    of the live-loop's transcription filters (filter_transcription and the
+    prompt-echo check), because a mistranscription faebot never "heard" should
+    not become a memory either. Whether a live-loop filter should double as a
+    memory filter is an open question, filed to the recognition sitting.
+    Unanticipated input is captured as-is (see record_raw) so
     faebot can perceive things we never coded for — the bitter-lesson discipline.
   * **Append-only, date-stamped.** Reruns/restarts accumulate, never truncate.
   * Capture files hold real people's chat/voice — the directory is gitignored
-    (faebot-private/scratch) and must never be committed.
+    (faebot-private/scratch) and must never be committed. This repo additionally
+    gitignores `twitch-*.jsonl` so a wrong cwd can't drop captures into the tree.
 """
 
 import os
@@ -28,7 +36,7 @@ import logging
 import datetime
 
 
-CAPTURE_DIR = os.getenv("SPIKE_CAPTURE_DIR", "")
+CAPTURE_DIR = os.getenv("TWITCH_CAPTURE_DIR", "")
 
 
 def is_enabled() -> bool:
@@ -48,7 +56,7 @@ def record(kind: str, **fields) -> None:
     attributes verbatim. Stamps a UTC `captured_at`. We do not interpret, merge,
     or drop — that is the offline transducer's and faebot's job.
     """
-    if not CAPTURE_DIR:
+    if not is_enabled():
         return
     try:
         event = {
@@ -63,14 +71,14 @@ def record(kind: str, **fields) -> None:
             )
     except Exception as error:
         # Capture must never disturb the bot — log and move on.
-        logging.debug(f"spike capture failed ({kind}): {type(error).__name__}: {error}")
+        logging.debug(f"capture failed ({kind}): {type(error).__name__}: {error}")
 
 
 def record_chat(message) -> None:
     """Record a TwitchIO chat Message (PRIVMSG). The full `tags` dict carries the
     rich stuff for free — bits/cheers, reply-parent, badges, colour, sub/mod flags,
     emote positions — so we keep it verbatim rather than pre-selecting fields."""
-    if not CAPTURE_DIR:
+    if not is_enabled():
         return
     try:
         author = getattr(message, "author", None)
@@ -88,14 +96,14 @@ def record_chat(message) -> None:
             tags=getattr(message, "tags", None),
         )
     except Exception as error:
-        logging.debug(f"spike capture_chat failed: {type(error).__name__}: {error}")
+        logging.debug(f"capture_chat failed: {type(error).__name__}: {error}")
 
 
 def record_usernotice(channel, tags) -> None:
     """Record a USERNOTICE — subs, resubs, gift subs, raids, announcements, rituals.
     `tags` msg-id names the type; msg-param-* carry the details; system-msg is the
     human-readable line. We keep the whole tag dict; the transducer sorts the kind."""
-    if not CAPTURE_DIR:
+    if not is_enabled():
         return
     try:
         record(
@@ -107,7 +115,7 @@ def record_usernotice(channel, tags) -> None:
         )
     except Exception as error:
         logging.debug(
-            f"spike capture_usernotice failed: {type(error).__name__}: {error}"
+            f"capture_usernotice failed: {type(error).__name__}: {error}"
         )
 
 
@@ -115,24 +123,24 @@ def record_voice(channel_name: str, text: str, **whisper_meta) -> None:
     """Record a Whisper voice transcription (the streamer's speech). `whisper_meta`
     carries language/probability/duration — metadata for a modality=voice Observation,
     the concrete first exercise of the senses sublayer + a two-modality check."""
-    if not CAPTURE_DIR:
+    if not is_enabled():
         return
     try:
         record("voice", channel=channel_name, text=text, **whisper_meta)
     except Exception as error:
-        logging.debug(f"spike capture_voice failed: {type(error).__name__}: {error}")
+        logging.debug(f"capture_voice failed: {type(error).__name__}: {error}")
 
 
 def record_faebot_message(channel_name: str, text: str, **meta) -> None:
     """Record faebot's own outgoing message — faer Action perceived back into the
     stream (the domain-model loop's hard case: 'faer own past Action perceived back').
     """
-    if not CAPTURE_DIR:
+    if not is_enabled():
         return
     try:
         record("faebot_message", channel=channel_name, text=text, **meta)
     except Exception as error:
-        logging.debug(f"spike capture_faebot failed: {type(error).__name__}: {error}")
+        logging.debug(f"capture_faebot failed: {type(error).__name__}: {error}")
 
 
 # Pure protocol keepalives — no perceptual content, skipped so the raw catch-all
@@ -144,7 +152,7 @@ def record_raw(data: str) -> None:
     """Catch-all: every raw IRC line TwitchIO receives. Guarantees nothing we
     didn't anticipate slips past — unknown commands, membership, roomstate, notices.
     Verbatim; interpret offline. Skips only PING/PONG keepalives."""
-    if not CAPTURE_DIR:
+    if not is_enabled():
         return
     try:
         for line in (data or "").splitlines():
@@ -153,4 +161,4 @@ def record_raw(data: str) -> None:
                 continue
             record("raw", line=stripped)
     except Exception as error:
-        logging.debug(f"spike capture_raw failed: {type(error).__name__}: {error}")
+        logging.debug(f"capture_raw failed: {type(error).__name__}: {error}")

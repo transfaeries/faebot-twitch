@@ -118,9 +118,9 @@ class TestNeverBreaksTheBot:
         assert read_events(enabled) == []
 
     def test_unserialisable_field_is_swallowed(self, enabled):
-        capture.record("raw", line=object())  # json.dumps(default=str) saves this…
-        capture.record("chat", content=lambda: None)  # …but a callable in a field
-        # Either way: nothing raised, and whatever landed is a string.
-        for event in read_events(enabled):
-            for value in event.values():
-                assert isinstance(value, str)
+        # default=str stringifies most oddballs, so a genuinely unserialisable
+        # field needs a circular reference (verified: json raises ValueError).
+        ouroboros = {}
+        ouroboros["self"] = ouroboros
+        capture.record("chat", content=ouroboros)  # must not raise
+        assert read_events(enabled) == []  # nothing written, no torn line

@@ -49,13 +49,13 @@ class Faebot(commands.Bot, FaebotCommands):
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
 
     async def event_raw_data(self, data):
-        """Spike 01 capture — faithful catch-all. Every raw IRC line TwitchIO
+        """Capture tap — faithful catch-all. Every raw IRC line TwitchIO
         receives is recorded (minus PING/PONG), so nothing we didn't anticipate
         can slip past. Interpretation happens offline. No-op unless capture is on."""
         capture.record_raw(data)
 
     async def event_raw_usernotice(self, channel, tags):
-        """Spike 01 capture — subs, resubs, gift subs, raids, announcements. These
+        """Capture tap — subs, resubs, gift subs, raids, announcements. These
         stream events are invisible to current faebot; here we record them raw."""
         capture.record_usernotice(channel, tags)
 
@@ -102,7 +102,7 @@ class Faebot(commands.Bot, FaebotCommands):
         """Handle a voice transcription from the streamer.
 
         `whisper_meta` (language, language_probability, duration…) is optional and
-        used only for spike capture — a modality=voice Observation with real
+        used only for capture — a modality=voice Observation with real
         metadata. It does not affect generation, so callers may omit it.
         """
         filtered = self.filter_transcription(text)
@@ -110,7 +110,7 @@ class Faebot(commands.Bot, FaebotCommands):
             return
         text = filtered
 
-        # Spike 01 capture — the streamer's voice (modality=voice), with Whisper meta.
+        # Capture tap — the streamer's voice (modality=voice), with Whisper meta.
         capture.record_voice(channel_name, text, **whisper_meta)
 
         conversation = core.ensure_conversation(channel_name)
@@ -200,7 +200,7 @@ class Faebot(commands.Bot, FaebotCommands):
         # though the message never reached chat. Future work: wire up
         # event_notice and correlate to the most recent send per channel.
         # See ROADMAP "Twitch NOTICE handling".
-        # Spike 01 capture — faebot's own utterance perceived back into the stream.
+        # Capture tap — faebot's own utterance perceived back into the stream.
         capture.record_faebot_message(
             channel_name,
             response,
@@ -220,7 +220,7 @@ class Faebot(commands.Bot, FaebotCommands):
 
     async def event_message(self, message):
         if message.echo:
-            # Spike 01 capture — Twitch's native view of faebot's own line (echo).
+            # Capture tap — Twitch's native view of faebot's own line (echo).
             # The reply loop is (correctly) short-circuited on echoes, but we still
             # record it so faebot's utterance also has Twitch-native metadata (real
             # message-id, tags) alongside the richer send-point record_faebot_message.
@@ -230,7 +230,7 @@ class Faebot(commands.Bot, FaebotCommands):
 
         logging.debug(f"received message: {message.author}: {message.content}")
 
-        # Spike 01 capture tap — faithful, opt-in, never interferes (capture.py).
+        # Capture tap — faithful, opt-in, never interferes (capture.py).
         # Record every non-echo message verbatim (commands included); the offline
         # transducer decides what matters.
         capture.record_chat(message)

@@ -298,7 +298,7 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
                                 )
 
                                 # Feed transcription to bot if connected. Whisper
-                                # metadata is passed through for spike capture only
+                                # metadata is passed through for capture only
                                 # (modality=voice Observation); it doesn't affect
                                 # generation. getattr-guarded so it can never break
                                 # the audio path.

@@ -26,3 +26,6 @@ node_modules/
 snippets/*
 faebot_messages.json
 permalog.txt
+
+# Capture tap output — real viewers' chat/voice, must never be committed
+twitch-*.jsonl

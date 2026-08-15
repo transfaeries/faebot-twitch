@@ -60,6 +60,7 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
                     event_clients.discard(ws)
 
     if events is not None:
+
         @app.on_event("startup")
         async def _start_drain() -> None:
             app.state.drain_task = asyncio.create_task(_drain_events())
@@ -297,13 +298,23 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
                                     )
                                 )
 
-                                # Feed transcription to bot if connected
+                                # Feed transcription to bot if connected. Whisper
+                                # metadata is passed through for capture only
+                                # (modality=voice Observation); it doesn't affect
+                                # generation. getattr-guarded so it can never break
+                                # the audio path.
                                 if app.state.bot:
                                     streamer = getenv(
                                         "STREAMER_CHANNEL", "transfaeries"
                                     )
                                     await app.state.bot.handle_transcription(
-                                        streamer, text
+                                        streamer,
+                                        text,
+                                        language=getattr(info, "language", None),
+                                        language_probability=getattr(
+                                            info, "language_probability", None
+                                        ),
+                                        duration=duration,
                                     )
                             else:
                                 logging.debug(f"Filtered prompt echo: {text}")

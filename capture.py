@@ -114,9 +114,7 @@ def record_usernotice(channel, tags) -> None:
             tags=tags,
         )
     except Exception as error:
-        logging.debug(
-            f"capture_usernotice failed: {type(error).__name__}: {error}"
-        )
+        logging.debug(f"capture_usernotice failed: {type(error).__name__}: {error}")
 
 
 def record_voice(channel_name: str, text: str, **whisper_meta) -> None:

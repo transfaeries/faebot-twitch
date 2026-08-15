@@ -96,9 +96,7 @@ class Faebot(commands.Bot, FaebotCommands):
                 return None
         return text
 
-    async def handle_transcription(
-        self, channel_name: str, text: str, **whisper_meta
-    ):
+    async def handle_transcription(self, channel_name: str, text: str, **whisper_meta):
         """Handle a voice transcription from the streamer.
 
         `whisper_meta` (language, language_probability, duration…) is optional and

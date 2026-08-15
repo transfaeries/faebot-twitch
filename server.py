@@ -60,6 +60,7 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
                     event_clients.discard(ws)
 
     if events is not None:
+
         @app.on_event("startup")
         async def _start_drain() -> None:
             app.state.drain_task = asyncio.create_task(_drain_events())

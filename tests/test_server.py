@@ -6,7 +6,7 @@ due to the complexity of mocking audio processing and CUDA models.
 
 import asyncio
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
 
@@ -23,12 +23,14 @@ def event_queue():
 def test_app(event_queue):
     """Create a test FastAPI app with mocked VAD/Whisper models."""
     # Mock the heavy ML models before importing server
-    with patch("server.load_silero_vad") as mock_vad, \
-         patch("server.WhisperModel") as mock_whisper:
+    with patch("server.load_silero_vad") as mock_vad, patch(
+        "server.WhisperModel"
+    ) as mock_whisper:
         mock_vad.return_value = MagicMock()
         mock_whisper.return_value = MagicMock()
 
         from server import create_app
+
         app = create_app(bot=None, events=event_queue)
         yield app
 
@@ -63,9 +65,8 @@ class TestHomeEndpoint:
 class TestEventsWebSocket:
     def test_websocket_connects(self, client):
         """Events WebSocket should accept connections."""
-        with client.websocket_connect("/ws/events") as websocket:
-            # Connection successful if we get here
-            pass
+        with client.websocket_connect("/ws/events"):
+            pass  # connection successful if we get here
 
     def test_replays_history_on_connect(self, test_app, event_queue):
         """New connections should receive event history from ring buffer."""
@@ -92,8 +93,6 @@ class TestEventsWebSocket:
                 test_event = {"type": "response", "id": "live-1", "text": "hello"}
 
                 # Push to all connected clients directly (simulating drain)
-                import asyncio
-
                 async def push_event():
                     for ws in list(test_app.state.event_clients):
                         await ws.send_json(test_event)
@@ -116,19 +115,15 @@ class TestEventDrain:
     @pytest.mark.asyncio
     async def test_drain_adds_to_history(self, event_queue):
         """Events from queue should be added to ring buffer."""
-        with patch("server.load_silero_vad") as mock_vad, \
-             patch("server.WhisperModel") as mock_whisper:
+        with patch("server.load_silero_vad") as mock_vad, patch(
+            "server.WhisperModel"
+        ) as mock_whisper:
             mock_vad.return_value = MagicMock()
             mock_whisper.return_value = MagicMock()
 
             from server import create_app
-            app = create_app(bot=None, events=event_queue)
 
-            # Manually start the drain task
-            drain_task = None
-            for attr in dir(app.state):
-                if "drain" in attr.lower():
-                    drain_task = getattr(app.state, attr, None)
+            app = create_app(bot=None, events=event_queue)
 
             # Push an event to the queue
             await event_queue.put({"type": "test", "id": "drain-1"})
@@ -143,12 +138,14 @@ class TestEventDrain:
     @pytest.mark.asyncio
     async def test_event_history_capped_at_50(self):
         """Ring buffer should cap at 50 events."""
-        with patch("server.load_silero_vad") as mock_vad, \
-             patch("server.WhisperModel") as mock_whisper:
+        with patch("server.load_silero_vad") as mock_vad, patch(
+            "server.WhisperModel"
+        ) as mock_whisper:
             mock_vad.return_value = MagicMock()
             mock_whisper.return_value = MagicMock()
 
             from server import create_app
+
             event_queue = asyncio.Queue()
             app = create_app(bot=None, events=event_queue)
 

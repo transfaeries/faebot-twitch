@@ -23,7 +23,6 @@ logging.basicConfig(
 logging.getLogger("torio").setLevel(logging.WARNING)  # suppress FFmpeg probe noise
 
 from twitchio.errors import AuthenticationError  # noqa: E402
-import core  # noqa: E402
 from bot import Faebot  # noqa: E402
 from server import create_app  # noqa: E402
 

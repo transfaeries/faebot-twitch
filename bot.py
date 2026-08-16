@@ -117,7 +117,7 @@ class Faebot(commands.Bot, FaebotCommands):
 
         text_normalized = re.sub(r"[^\w\s]", "", text.lower())
         if VOICE_ACTIVATION in text_normalized:
-            logging.info(f"Voice activation phrase detected, generating!")
+            logging.info("Voice activation phrase detected, generating!")
             asyncio.create_task(
                 self._generate_and_send(channel_name, trigger_type="voice")
             )

@@ -6,7 +6,7 @@ we call the callback function directly via `command_method._callback(instance, c
 """
 
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 import core
 
 
@@ -26,7 +26,9 @@ class TestRequiresMod:
         # Call the callback directly, bypassing TwitchIO Command machinery
         await instance.clear._callback(instance, ctx)
 
-        assert "cleared" in ctx.replies[0].lower() or "forgotten" in ctx.replies[0].lower()
+        assert (
+            "cleared" in ctx.replies[0].lower() or "forgotten" in ctx.replies[0].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_admin_can_use_command(self, mock_context):
@@ -40,7 +42,9 @@ class TestRequiresMod:
             instance = FaebotCommands()
             await instance.clear._callback(instance, ctx)
 
-        assert "cleared" in ctx.replies[0].lower() or "forgotten" in ctx.replies[0].lower()
+        assert (
+            "cleared" in ctx.replies[0].lower() or "forgotten" in ctx.replies[0].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_regular_user_blocked(self, mock_context):
@@ -169,7 +173,9 @@ class TestAliasCommand:
         instance = FaebotCommands()
         await instance.alias._callback(instance, ctx)
 
-        assert "haven't" in ctx.replies[0].lower() or "set one" in ctx.replies[0].lower()
+        assert (
+            "haven't" in ctx.replies[0].lower() or "set one" in ctx.replies[0].lower()
+        )
 
     @pytest.mark.asyncio
     async def test_alias_added_to_chatlog(self, mock_context):
@@ -409,7 +415,9 @@ class TestAdminCommands:
         """model with arg should set new model."""
         from commands import FaebotCommands
 
-        ctx = mock_context("fae;model anthropic/claude-3-haiku", author_name="transfaeries")
+        ctx = mock_context(
+            "fae;model anthropic/claude-3-haiku", author_name="transfaeries"
+        )
         conv = core.ensure_conversation("testchannel")
 
         with patch("commands.ADMIN", ["transfaeries"]):

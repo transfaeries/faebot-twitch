@@ -4,6 +4,9 @@ version = "0.2.0"
 description = "Faebot AI Chatbot for twitch with voice integration"
 authors = ["transfaeries"]
 readme = "README.md"
+# An app of flat modules, not a library: nothing to install as a package.
+# (The Dockerfile already says --no-root; this makes it true everywhere.)
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.11"

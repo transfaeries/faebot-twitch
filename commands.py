@@ -5,6 +5,7 @@ Faebot inherits from this class to gain all fb;/fae; commands.
 
 from twitchio.ext import commands
 from functools import wraps
+from typing import Awaitable, Callable
 import os
 import logging
 
@@ -26,6 +27,11 @@ def requires_mod(command):
 
 class FaebotCommands:
     """Mixin providing all fb;/fae; chat commands."""
+
+    # Provided by twitchio's Bot when this mixin is composed into Faebot;
+    # declared here so mypy knows the mixin may call them.
+    join_channels: Callable[[list[str]], Awaitable[None]]
+    part_channels: Callable[[list[str]], Awaitable[None]]
 
     # --- commands for everyone ---
 
@@ -178,6 +184,8 @@ class FaebotCommands:
         """Invite faebot to join a channel."""
         if ctx.author.name not in ADMIN:
             return await ctx.send("sorry you need to be an admin to use that command")
+        if not user:
+            return await ctx.reply("usage: join <channel>")
 
         await self.join_channels([user])
         logging.info(f"Joined new channel: {user}")

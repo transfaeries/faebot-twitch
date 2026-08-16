@@ -58,7 +58,9 @@ class TestHandleTranscription:
         mock_faebot._generate_and_send = AsyncMock()
 
         with patch("bot.VOICE_ACTIVATION", "faebot dearest"):
-            await mock_faebot.handle_transcription("testchannel", "faebot dearest, what do you think?")
+            await mock_faebot.handle_transcription(
+                "testchannel", "faebot dearest, what do you think?"
+            )
 
         # Give the task a moment to be created
         await asyncio.sleep(0.01)
@@ -76,7 +78,9 @@ class TestHandleTranscription:
 
         # Patch random to return value that would trigger at 0.5 but not at voice_frequency
         with patch("core.random", return_value=0.3):
-            await mock_faebot.handle_transcription("testchannel", "hey faebot what's up")
+            await mock_faebot.handle_transcription(
+                "testchannel", "hey faebot what's up"
+            )
 
         await asyncio.sleep(0.01)
         mock_faebot._generate_and_send.assert_called_once()
@@ -90,7 +94,9 @@ class TestHandleTranscription:
 
         # Roll of 0.05 should trigger at voice_frequency 0.1
         with patch("core.random", return_value=0.05):
-            await mock_faebot.handle_transcription("testchannel", "just talking about stuff")
+            await mock_faebot.handle_transcription(
+                "testchannel", "just talking about stuff"
+            )
 
         await asyncio.sleep(0.01)
         mock_faebot._generate_and_send.assert_called_once()
@@ -104,7 +110,9 @@ class TestHandleTranscription:
 
         # Roll of 0.5 should NOT trigger at voice_frequency 0.1
         with patch("core.random", return_value=0.5):
-            await mock_faebot.handle_transcription("testchannel", "just talking about stuff")
+            await mock_faebot.handle_transcription(
+                "testchannel", "just talking about stuff"
+            )
 
         await asyncio.sleep(0.01)
         mock_faebot._generate_and_send.assert_not_called()
@@ -138,7 +146,9 @@ class TestGenerateAndSend:
         assert event["channel"] == "testchannel"
 
     @pytest.mark.asyncio
-    async def test_generation_failure_emits_error_and_fallback(self, mock_faebot, openrouter_error):
+    async def test_generation_failure_emits_error_and_fallback(
+        self, mock_faebot, openrouter_error
+    ):
         """Generation failure should emit error event and send fallback message."""
         core.ensure_conversation("testchannel")
         openrouter_error(status=500, repeat=True)
@@ -152,7 +162,10 @@ class TestGenerateAndSend:
         # Check fallback message was sent
         mock_channel.send.assert_called()
         fallback_call = mock_channel.send.call_args
-        assert "oops" in fallback_call[0][0].lower() or "strange" in fallback_call[0][0].lower()
+        assert (
+            "oops" in fallback_call[0][0].lower()
+            or "strange" in fallback_call[0][0].lower()
+        )
 
         # Check error event was emitted (skip the generating event)
         event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
@@ -162,7 +175,9 @@ class TestGenerateAndSend:
         assert event["type"] == "error"
 
     @pytest.mark.asyncio
-    async def test_send_failure_emits_error_event(self, mock_faebot, openrouter_success):
+    async def test_send_failure_emits_error_event(
+        self, mock_faebot, openrouter_success
+    ):
         """Send failure should emit error event with same generation_id."""
         core.ensure_conversation("testchannel")
         openrouter_success("hello!")

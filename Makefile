@@ -1,38 +1,29 @@
-.PHONY: test lint format static_type_check setup-hooks clean all
+.PHONY: format format-check lint typecheck test all clean
 
-# Default target
-all: black lint static_type_check test
+# The gate. Checks only — `make all` never rewrites files. CI runs this.
+all: format-check lint typecheck test
 
-# Run tests with pytest
-test:
-	@echo "Running tests with coverage..."
-	poetry run pytest -v tests/ --cov=. --cov-report=term-missing
-
-# Run linting with flake8
-lint:
-	@echo "Running linter..."
-	poetry run flake8 .
-
-# Format code with black
-black:
-	@echo "Running formatter..."
+# Rewrite code to house style (the only writing target).
+format:
 	poetry run black .
 
-# Run static type checking with mypy
-static_type_check:
-	@echo "Running static type checker..."
+# Fail (without writing) if formatting is off.
+format-check:
+	poetry run black --check .
+
+# Lint.
+lint:
+	poetry run flake8 .
+
+# Static types (snippets/ is scratch, not shipped).
+typecheck:
 	poetry run mypy . --exclude 'snippets/'
 
-# Setup pre-commit hooks
-setup-hooks:
-	@echo "Setting up git hooks..."
-	git config core.hooksPath .githooks
-	chmod +x .githooks/pre-commit
+# Tests with coverage.
+test:
+	poetry run pytest -v tests/ --cov=. --cov-report=term-missing
 
-# Clean up cache directories
+# Clean caches.
 clean:
-	@echo "Cleaning up..."
-	rm -rf .pytest_cache
-	rm -rf .mypy_cache
-	rm -rf .coverage
+	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage
 	find . -type d -name __pycache__ -exec rm -rf {} +

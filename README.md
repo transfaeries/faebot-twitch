@@ -109,10 +109,11 @@ poetry run python bot.py
 ### Development
 
 ```bash
-make lint              # flake8
-make black             # code formatting
-make static_type_check # mypy
-make all               # run everything
+make all           # the gate: black --check, flake8, mypy, pytest — never writes (CI runs this)
+make format        # rewrite code to house style (the one writing target)
+make lint          # flake8
+make typecheck     # mypy
+make test          # pytest with coverage
 ```
 
 ## Roadmap

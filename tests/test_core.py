@@ -25,10 +25,12 @@ class TestEnsureConversation:
         assert second.frequency == 0.99
 
     def test_defaults(self):
+        """Defaults come from the env-readable module constants."""
         conv = core.ensure_conversation("defaults")
-        assert conv.frequency == 0.05
-        assert conv.voice_frequency == 0.025
-        assert conv.history == 20
+        assert conv.frequency == core.FREQUENCY
+        assert conv.voice_frequency == core.VOICE_FREQUENCY
+        assert conv.history == core.HISTORY
+        assert conv.model == core.MODEL
         assert conv.silenced is False
         assert conv.chatlog == []
 
@@ -161,7 +163,9 @@ class TestGenerate:
     async def test_successful_generation(self, openrouter_success):
         openrouter_success("test response")
         result = await core.generate(prompt="hello", system_prompt="you are faebot")
-        assert result == "test response"
+        assert result.text == "test response"
+        assert result.reasoning == ""
+        assert result.attempts == 1
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -173,7 +177,7 @@ class TestGenerate:
                 payload={"error": "forbidden"},
             )
             result = await core.generate(prompt="hello")
-            assert "couldn't generate" in result.lower()
+            assert "couldn't generate" in result.text.lower()
             await core.close_session()
 
     @pytest.mark.asyncio
@@ -190,7 +194,7 @@ class TestGenerate:
                 payload={"choices": [{"message": {"content": "recovered!"}}]},
             )
             result = await core.generate(prompt="hello")
-            assert result == "recovered!"
+            assert result.text == "recovered!"
             await core.close_session()
 
     @pytest.mark.asyncio
@@ -206,7 +210,7 @@ class TestGenerate:
                 payload={"choices": [{"message": {"content": "after rate limit"}}]},
             )
             result = await core.generate(prompt="hello")
-            assert result == "after rate limit"
+            assert result.text == "after rate limit"
             await core.close_session()
 
     @pytest.mark.asyncio
@@ -224,8 +228,90 @@ class TestGenerate:
                 payload={"unexpected": "format"},
             )
             result = await core.generate(prompt="hello")
-            assert "couldn't generate" in result.lower()
+            assert "couldn't generate" in result.text.lower()
             await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_and_content_kept_apart(self):
+        """`content` is the answer channel, `reasoning` a separate one — both
+        survive, neither leaks into the other."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "model": "moonshotai/kimi-k3",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "hi chat!",
+                                "reasoning": "they said hello, I should say hi",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"completion_tokens": 40},
+                },
+            )
+            result = await core.generate(prompt="hello")
+        assert result.text == "hi chat!"
+        assert result.reasoning == "they said hello, I should say hi"
+        assert result.finish_reason == "stop"
+        assert result.model == "moonshotai/kimi-k3"
+        assert result.usage == {"completion_tokens": 40}
+        assert result.elapsed >= 0
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_request_sends_reasoning_room_on_top_of_answer_cap(self):
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "ok"}}]},
+            )
+            await core.generate(prompt="hello", model="some/model")
+            (request,) = [call for calls in mocked.requests.values() for call in calls]
+        body = request.kwargs["json"]
+        assert body["model"] == "some/model"
+        assert body["reasoning"] == {"max_tokens": core.REASONING_CAP}
+        assert body["max_tokens"] == core.GENERATION_CAP + core.REASONING_CAP
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_empty_answer_channel_rolls_again(self):
+        """Empty `content` beside a full `reasoning` is a dropped payload, not
+        silence — roll once more."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "choices": [
+                        {"message": {"content": "", "reasoning": "thinking..."}}
+                    ]
+                },
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "second try"}}]},
+            )
+            result = await core.generate(prompt="hello")
+        assert result.text == "second try"
+        assert result.attempts == 2
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_empty_twice_returns_empty_honestly(self):
+        """After the rolls run out the Completion stays empty — the caller
+        decides what a dropped payload means; generate() tells the truth."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": ""}}]},
+                repeat=True,
+            )
+            result = await core.generate(prompt="hello")
+        assert result.is_empty
+        assert result.attempts == core.EMPTY_ROLLS
+        await core.close_session()
 
 
 # ── generate_response (full pipeline) ────────────────────────────────
@@ -243,7 +329,7 @@ class TestGenerateResponse:
             result = await core.generate_response(
                 "testchannel", stream_title="Test", game_name="Art"
             )
-        assert result == "hi there!"
+        assert result.text == "hi there!"
         assert "faebot: hi there!" in conversation.chatlog
         await core.close_session()
 
@@ -270,8 +356,24 @@ class TestGenerateResponse:
                 payload={"choices": [{"message": {"content": long_text}}]},
             )
             result = await core.generate_response("testchannel")
-        assert len(result) == 500
-        assert result.endswith("\u2013")
+        assert len(result.text) == 500
+        assert result.text.endswith("\u2013")
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_multiline_reply_is_folded_to_one_line(self, conversation):
+        """IRC carries one line per message; kimi writes several."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "choices": [
+                        {"message": {"content": "hi chat!!\n\n*flutters*  \nbye~"}}
+                    ]
+                },
+            )
+            result = await core.generate_response("testchannel")
+        assert result.text == "hi chat!! *flutters* bye~"
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -283,7 +385,7 @@ class TestGenerateResponse:
                 payload={"choices": [{"message": {"content": "hitransf23Botlovebye"}}]},
             )
             result = await core.generate_response("testchannel", emotes=emotes)
-        assert result == "hi transf23Botlove bye"
+        assert result.text == "hi transf23Botlove bye"
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -319,7 +421,7 @@ class TestEventQueue:
                 payload={"choices": [{"message": {"content": "hi"}}]},
             )
             result = await core.generate_response("testchannel")
-        assert result == "hi"
+        assert result.text == "hi"
         await core.close_session()
 
     @pytest.mark.asyncio

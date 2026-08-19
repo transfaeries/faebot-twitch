@@ -152,7 +152,7 @@ class Faebot(commands.Bot, FaebotCommands):
 
         generation_id = str(uuid.uuid4())
         try:
-            response = await core.generate_response(
+            completion = await core.generate_response(
                 channel_name=channel_name,
                 stream_title=stream_title,
                 game_name=game_name,
@@ -171,6 +171,8 @@ class Faebot(commands.Bot, FaebotCommands):
             except Exception as fallback_e:
                 logging.error(f"Failed to send fallback message too: {fallback_e}")
             return
+
+        response = completion.text
 
         try:
             await channel.send(response)
@@ -199,11 +201,13 @@ class Faebot(commands.Bot, FaebotCommands):
         # event_notice and correlate to the most recent send per channel.
         # See ROADMAP "Twitch NOTICE handling".
         # Capture tap — faebot's own utterance perceived back into the stream.
+        # Reasoning + latency ride along, so the capture doubles as data.
         capture.record_faebot_message(
             channel_name,
             response,
             generation_id=generation_id,
             trigger_type=trigger_type,
+            **completion.capture_meta(),
         )
 
         core.put_event(
@@ -213,6 +217,7 @@ class Faebot(commands.Bot, FaebotCommands):
                 "id": generation_id,
                 "channel": channel_name,
                 "text": response,
+                **completion.capture_meta(),
             },
         )
 

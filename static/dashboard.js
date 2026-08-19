@@ -247,8 +247,10 @@ class AudioCapture {
 
 // EventStream: listens to /ws/events and renders generation cards.
 // Cards are correlated by generation_id — `generating` opens a card,
-// `response` fills it in, `error` marks it failed. Multiple in-flight
-// cards are fine; each closes independently.
+// `response` fills it in, `pass` marks it as chosen silence, `error` marks
+// it failed. Multiple in-flight cards are fine; each closes independently.
+// The reasoning channel (when the model has one) sits in a collapsed
+// <details> on the card — thoughts visible, words trusted.
 class EventStream {
     constructor() {
         this.log = document.getElementById('generationsLog');
@@ -298,6 +300,9 @@ class EventStream {
             case 'response':
                 this.fillCard(event);
                 break;
+            case 'pass':
+                this.passCard(event);
+                break;
             case 'error':
                 this.failCard(event);
                 break;
@@ -329,6 +334,10 @@ class EventStream {
             </div>
             <div class="gen-trigger"></div>
             <div class="gen-response"><span class="gen-pending">generating…</span></div>
+            <details class="gen-reasoning" hidden>
+                <summary>reasoning</summary>
+                <pre class="gen-reasoning-text"></pre>
+            </details>
             <div class="gen-details" hidden>
                 <h3>Trigger</h3>
                 <pre class="gen-trigger-full"></pre>
@@ -351,7 +360,9 @@ class EventStream {
         );
         card.querySelector('.gen-meta').textContent = `model: ${event.model || 'unknown'}`;
 
-        card.addEventListener('click', () => {
+        card.addEventListener('click', (click) => {
+            // The reasoning dropdown toggles itself; don't also toggle the card.
+            if (click.target.closest('.gen-reasoning')) return;
             const details = card.querySelector('.gen-details');
             details.hidden = !details.hidden;
         });
@@ -371,12 +382,40 @@ class EventStream {
         const card = entry.el;
         card.classList.remove('pending');
         card.querySelector('.gen-response').textContent = event.text || '';
-        // Update the meta line with timing if we have both timestamps
+        this.finishCard(card, entry, event);
+    }
+
+    passCard(event) {
+        const entry = this.cards.get(event.id);
+        if (!entry) {
+            console.debug('pass for unknown id:', event.id);
+            return;
+        }
+        const card = entry.el;
+        card.classList.remove('pending');
+        card.classList.add('passed');
+        const response = card.querySelector('.gen-response');
+        response.textContent = event.reason
+            ? `— stayed quiet: ${event.reason}`
+            : '— stayed quiet —';
+        this.finishCard(card, entry, event);
+    }
+
+    // Shared tail of response/pass: show the reasoning channel if there is
+    // one, and write the meta line (model · api time · finish reason).
+    finishCard(card, entry, event) {
+        if (event.reasoning) {
+            const reasoning = card.querySelector('.gen-reasoning');
+            reasoning.querySelector('.gen-reasoning-text').textContent = event.reasoning;
+            reasoning.hidden = false;
+        }
         const meta = card.querySelector('.gen-meta');
-        const startTs = entry.generating && entry.generating.timestamp;
-        if (meta && startTs && event.timestamp) {
-            const dt = (new Date(event.timestamp) - new Date(startTs)) / 1000;
-            meta.textContent = `model: ${entry.generating.model || 'unknown'} · ${dt.toFixed(2)}s`;
+        if (meta) {
+            const parts = [`model: ${event.model || (entry.generating && entry.generating.model) || 'unknown'}`];
+            if (typeof event.elapsed === 'number') parts.push(`${event.elapsed.toFixed(1)}s`);
+            if (event.finish_reason && event.finish_reason !== 'stop') parts.push(`finish: ${event.finish_reason}`);
+            if (event.attempts && event.attempts > 1) parts.push(`attempts: ${event.attempts}`);
+            meta.textContent = parts.join(' · ');
         }
         this.scrollToBottom();
     }

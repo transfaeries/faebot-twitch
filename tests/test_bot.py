@@ -187,6 +187,45 @@ class TestGenerateAndSend:
         assert event["reasoning"] == "a greeting"
 
     @pytest.mark.asyncio
+    async def test_pass_sends_nothing_and_records_the_choice(
+        self, mock_faebot, mock_openrouter
+    ):
+        core.ensure_conversation("testchannel")
+        mock_openrouter.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            payload={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "NOTHING-TO-SAY, they're busy",
+                            "reasoning": "ember is mid-sentence",
+                        }
+                    }
+                ]
+            },
+        )
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock()
+        mock_faebot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch("bot.capture.record_faebot_pass") as record_pass, patch(
+            "bot.capture.record_faebot_message"
+        ) as record_message:
+            await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
+
+        mock_channel.send.assert_not_called()
+        record_message.assert_not_called()
+        record_pass.assert_called_once()
+        args, meta = record_pass.call_args
+        assert args == ("testchannel", "they're busy")
+        assert meta["reasoning"] == "ember is mid-sentence"
+
+        await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)  # generating
+        event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
+        assert event["type"] == "pass"
+        assert event["reason"] == "they're busy"
+
+    @pytest.mark.asyncio
     async def test_generation_failure_emits_error_and_fallback(
         self, mock_faebot, openrouter_error
     ):

@@ -155,6 +155,36 @@ class TestBuildSystemPrompt:
         assert "42" in prompt
 
 
+# ── the silence sentinel ─────────────────────────────────────────────
+
+
+class TestSaidNothing:
+    def test_bare_sentinel(self):
+        assert core.said_nothing("NOTHING-TO-SAY")
+        assert core.pass_reason("NOTHING-TO-SAY") == ""
+
+    def test_case_and_spacing_are_forgiven(self):
+        assert core.said_nothing("nothing to say")
+        assert core.said_nothing("  Nothing-To-Say.")
+
+    def test_reason_after_sentinel_is_kept(self):
+        text = "NOTHING-TO-SAY — they're mid-conversation, I'll listen"
+        assert core.said_nothing(text)
+        assert core.pass_reason(text) == "they're mid-conversation, I'll listen"
+
+    def test_sentinel_mid_sentence_is_speech(self):
+        assert not core.said_nothing("honestly I have nothing to say about that")
+
+    def test_empty_is_a_drop_not_silence(self):
+        assert not core.said_nothing("")
+        assert not core.said_nothing("   ")
+
+    def test_prompt_tells_faebot_the_verb(self):
+        conv = core.Conversation(channel="c")
+        prompt = core.build_system_prompt(conv, "c", "t", "g", [])
+        assert core.SENTINEL_SILENCE in prompt
+
+
 # ── generate (OpenRouter API) ────────────────────────────────────────
 
 
@@ -358,6 +388,32 @@ class TestGenerateResponse:
             result = await core.generate_response("testchannel")
         assert len(result.text) == 500
         assert result.text.endswith("\u2013")
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_pass_is_not_posted_but_is_remembered(self, conversation):
+        """The sentinel marks chosen silence: text stays as-is for the caller
+        to recognise, the chatlog records the fact (not the reason)."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "NOTHING-TO-SAY — just listening",
+                                "reasoning": "nobody's talking to me",
+                            }
+                        }
+                    ]
+                },
+            )
+            result = await core.generate_response("testchannel")
+        assert result.passed
+        assert result.reason_for_passing == "just listening"
+        assert result.reasoning == "nobody's talking to me"
+        assert conversation.chatlog[-1] == "faebot: *stays quiet*"
+        assert not any("listening" in line for line in conversation.chatlog)
         await core.close_session()
 
     @pytest.mark.asyncio

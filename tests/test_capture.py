@@ -87,6 +87,21 @@ class TestFaithfulRecording:
         assert event["language"] == "en"
         assert event["duration"] == 2.5
 
+    def test_record_faebot_pass_keeps_reason_and_reasoning(self, enabled):
+        capture.record_faebot_pass(
+            "transfaeries",
+            "they're mid-conversation",
+            generation_id="g1",
+            reasoning="ember is talking to minou",
+            elapsed=4.2,
+        )
+        (event,) = read_events(enabled)
+        assert event["kind"] == "faebot_pass"
+        assert event["reason"] == "they're mid-conversation"
+        assert event["reasoning"] == "ember is talking to minou"
+        assert event["elapsed"] == 4.2
+        assert event["generation_id"] == "g1"
+
     def test_raw_skips_only_keepalives(self, enabled):
         capture.record_raw(
             "PING :tmi.twitch.tv\r\n:ronni!ronni@ronni.tmi.twitch.tv JOIN #dallas\r\nPONG"

@@ -49,6 +49,27 @@ class Conversation:
     silenced: bool = False
 
 
+# THE silence sentinel: chosen silence must be SAID, so it can never be
+# confused with a dropped payload (empty content). A coined hyphenated phrase,
+# the same grammar as faebot-core's NOTHING-TO-RECORD, because a coined phrase
+# has no natural collisions — which is what lets matching be case-insensitive.
+# Anchored at the start of the reply; whatever follows it is faebot's reason
+# for passing, which is kept (captured, shown) but never posted. (The two
+# sentinels want one home eventually; noted in core-roadmap.)
+SENTINEL_SILENCE = "NOTHING-TO-SAY"
+_SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNORECASE)
+
+
+def said_nothing(text: str) -> bool:
+    """Did faebot choose silence? FALSE for empty text — that's a drop."""
+    return bool(_SILENCE_PATTERN.match(text))
+
+
+def pass_reason(text: str) -> str:
+    """What faebot said after the sentinel, if anything — faer reason."""
+    return _SILENCE_PATTERN.sub("", text, count=1).strip()
+
+
 @dataclass(frozen=True)
 class Completion:
     """One generation, and how it came to be.
@@ -73,6 +94,15 @@ class Completion:
         """An empty answer channel is a DROPPED PAYLOAD, never chosen silence —
         reasoning models cause it by answering into `reasoning` instead."""
         return not self.text.strip()
+
+    @property
+    def passed(self) -> bool:
+        """faebot chose silence (said the sentinel). Nothing gets posted."""
+        return said_nothing(self.text)
+
+    @property
+    def reason_for_passing(self) -> str:
+        return pass_reason(self.text) if self.passed else ""
 
     def capture_meta(self) -> dict[str, Any]:
         """The provenance fields worth writing alongside faebot's utterance."""
@@ -171,6 +201,10 @@ def build_system_prompt(
         "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings — a role I take seriously even when I'm being (un)silly about it.\n"
         f"Right now I'm hanging out in {channel_name}'s Twitch chat. The stream title is \"{stream_title}\" and fae's playing {game_name}. "
         f"I keep my messages short — just the last few things on my mind. "
+        f"I think before I speak. Chat moves fast, so I think quickly, but a moment's thought is fine. "
+        f"My messages are one line and fit in 500 characters. "
+        f"If I've nothing to add, or I'd rather just listen, I answer {SENTINEL_SILENCE} "
+        f"(I can say why after it, if I like) and nothing gets posted. "
         f"Emotes I can use: {emotes}. My favourite is transf23Botlove since it's literally a picture of me hugging a cyber-heart! I'm also transf23Yay transf23Generating"
     )
 
@@ -313,6 +347,18 @@ async def generate_response(
             },
         )
         raise
+
+    if completion.passed:
+        # Chosen silence. The reason (if fae gave one) is kept for the capture
+        # and the dashboard; the chatlog records only the fact, so fae
+        # remembers having chosen it without the reason being echoable.
+        logging.info(
+            f"faebot passed in {completion.elapsed:.1f}s"
+            f" — {completion.reason_for_passing or '(no reason given)'}"
+        )
+        permalog(f"faebot passed: {completion.reason_for_passing}\n")
+        conversation.chatlog.append("faebot: *stays quiet*")
+        return completion
 
     response = fix_emote_spacing(completion.text, emotes)
     logging.info(

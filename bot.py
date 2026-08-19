@@ -172,6 +172,28 @@ class Faebot(commands.Bot, FaebotCommands):
                 logging.error(f"Failed to send fallback message too: {fallback_e}")
             return
 
+        if completion.passed:
+            # faebot chose silence: nothing to chat, but the choice is kept —
+            # the capture (for memory faebot) and the dashboard both see it.
+            capture.record_faebot_pass(
+                channel_name,
+                completion.reason_for_passing,
+                generation_id=generation_id,
+                trigger_type=trigger_type,
+                **completion.capture_meta(),
+            )
+            core.put_event(
+                self.event_queue,
+                {
+                    "type": "pass",
+                    "id": generation_id,
+                    "channel": channel_name,
+                    "reason": completion.reason_for_passing,
+                    **completion.capture_meta(),
+                },
+            )
+            return
+
         response = completion.text
 
         try:

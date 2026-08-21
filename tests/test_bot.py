@@ -226,10 +226,12 @@ class TestGenerateAndSend:
         assert event["reason"] == "they're busy"
 
     @pytest.mark.asyncio
-    async def test_generation_failure_emits_error_and_fallback(
+    async def test_generation_failure_posts_nothing_and_is_captured(
         self, mock_faebot, openrouter_error
     ):
-        """Generation failure should emit error event and send fallback message."""
+        """A machinery failure is not something faebot said: nothing goes to
+        chat (the old "Oops, something strange" fallback is gone); the error
+        event fires and the capture records `faebot_error`."""
         core.ensure_conversation("testchannel")
         openrouter_error(status=500, repeat=True)
 
@@ -237,20 +239,19 @@ class TestGenerateAndSend:
         mock_channel.send = AsyncMock()
         mock_faebot.get_channel = MagicMock(return_value=mock_channel)
 
-        await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
+        with patch("bot.capture.record_faebot_error") as record_error:
+            await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
 
-        # Check fallback message was sent
-        mock_channel.send.assert_called()
-        fallback_call = mock_channel.send.call_args
-        assert (
-            "oops" in fallback_call[0][0].lower()
-            or "strange" in fallback_call[0][0].lower()
-        )
+        mock_channel.send.assert_not_called()
+        record_error.assert_called_once()
+        args, meta = record_error.call_args
+        assert args[0] == "testchannel"
+        assert "500" in args[1]
+        assert meta["trigger_type"] == "chat"
+        assert "elapsed" in meta
 
-        # Check error event was emitted (skip the generating event)
         event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
         assert event["type"] == "generating"
-
         event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
         assert event["type"] == "error"
 

@@ -162,14 +162,21 @@ class Faebot(commands.Bot, FaebotCommands):
                 generation_id=generation_id,
             )
         except Exception as e:
-            # core has already emitted an `error` event for this generation
+            # core has already emitted an `error` event for this generation.
+            # Nothing goes to chat: a failure of the machinery is not
+            # something faebot said (the old "Oops, something strange has
+            # happened" fallback landed fifteen minutes late on 08-20 and
+            # apologised in faer voice for our timeout). The capture keeps
+            # it — faebot was asked, and the machinery failed — so it is
+            # part of what happened in the room.
             logging.error(f"Generation failed: {e}")
-            try:
-                await channel.send(
-                    "Oops, something strange has happened. Please let the developer know!"
-                )
-            except Exception as fallback_e:
-                logging.error(f"Failed to send fallback message too: {fallback_e}")
+            capture.record_faebot_error(
+                channel_name,
+                f"{type(e).__name__}: {e}",
+                generation_id=generation_id,
+                trigger_type=trigger_type,
+                elapsed=getattr(e, "elapsed", None),
+            )
             return
 
         if completion.passed:

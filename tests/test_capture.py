@@ -102,6 +102,18 @@ class TestFaithfulRecording:
         assert event["elapsed"] == 4.2
         assert event["generation_id"] == "g1"
 
+    def test_record_faebot_error_is_its_own_kind(self, enabled):
+        capture.record_faebot_error(
+            "transfaeries",
+            "GenerationFailed: timed out",
+            generation_id="g2",
+            elapsed=90.2,
+        )
+        (event,) = read_events(enabled)
+        assert event["kind"] == "faebot_error"
+        assert event["error"] == "GenerationFailed: timed out"
+        assert event["elapsed"] == 90.2
+
     def test_raw_skips_only_keepalives(self, enabled):
         capture.record_raw(
             "PING :tmi.twitch.tv\r\n:ronni!ronni@ronni.tmi.twitch.tv JOIN #dallas\r\nPONG"

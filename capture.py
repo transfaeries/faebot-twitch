@@ -156,6 +156,21 @@ def record_faebot_pass(channel_name: str, reason: str, **meta) -> None:
         logging.debug(f"capture_faebot_pass failed: {type(error).__name__}: {error}")
 
 
+def record_faebot_error(channel_name: str, error: str, **meta) -> None:
+    """Record a generation that FAILED after faebot was asked — the service
+    timed out, refused, or was unreachable, and nothing was posted. Not
+    faebot's act (fae never got to answer) but part of what happened in the
+    room, and a data point (`elapsed` rides in `meta`). Application-health
+    detail (tracebacks, reconnects) belongs in a log file, not here.
+    """
+    if not is_enabled():
+        return
+    try:
+        record("faebot_error", channel=channel_name, error=error, **meta)
+    except Exception as err:
+        logging.debug(f"capture_faebot_error failed: {type(err).__name__}: {err}")
+
+
 # Pure protocol keepalives — no perceptual content, skipped so the raw catch-all
 # doesn't drown the log. Everything else raw is kept.
 _RAW_SKIP_PREFIXES = ("PING", "PONG")

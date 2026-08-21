@@ -5,7 +5,7 @@ No TwitchIO or FastAPI dependencies. Both bot.py and server.py import from here.
 
 from typing import Any, Optional
 from dataclasses import dataclass, field, replace
-from random import randrange, random
+from random import random
 import os
 import time
 import aiohttp
@@ -34,6 +34,22 @@ VOICE_FREQUENCY = float(os.getenv("VOICE_FREQUENCY", "0.025"))
 # sharing one purse let deliberation eat the reply).
 GENERATION_CAP = int(os.getenv("GENERATION_CAP", "500"))
 REASONING_CAP = int(os.getenv("REASONING_CAP", "8000"))
+
+# Sampling is PINNED, not rolled (2026-08-21). The per-generation lottery
+# (temperature 0.75–1.5, top_p 0.5–1.0) dates from the gemini-flash era; on
+# kimi-k3 its hot corner (T >= 1.4 AND top_p = 1.0) produced word soup 4/4
+# times on the 08-20 stream — and Moonshot's own API reportedly ignores the
+# values anyway, so the lottery was never an honest experiment. These are
+# Moonshot's published defaults for k3. Moods, if faebot wants them, get
+# designed on purpose later, not inherited from dice.
+TEMPERATURE = float(os.getenv("TEMPERATURE", "1.0"))
+TOP_P = float(os.getenv("TOP_P", "0.95"))
+
+# One request, one chance. A reply that arrives after a retry cycle arrives
+# after the moment (the 08-20 "Oops" messages landed fifteen minutes late:
+# aiohttp's 300s default × 3 retries). No retries; a real timeout; a failure
+# is reported to the dashboard and the capture, never spoken in faebot's voice.
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "90"))
 
 
 @dataclass
@@ -86,7 +102,9 @@ class Completion:
     elapsed: float = 0.0
     finish_reason: str = ""
     model: str = ""
+    provider: str = ""
     usage: dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
     attempts: int = 1
 
     @property
@@ -111,9 +129,24 @@ class Completion:
             "elapsed": self.elapsed,
             "finish_reason": self.finish_reason,
             "model": self.model,
+            "provider": self.provider,
+            "params": self.params,
             "usage": self.usage,
             "attempts": self.attempts,
         }
+
+
+class GenerationFailed(Exception):
+    """The generating service could not be reached, or would not answer.
+
+    Distinct from an empty Completion (a dropped payload) and from chosen
+    silence: this is the call failing. Carries `elapsed` so a failure is
+    still a data point."""
+
+    def __init__(self, reason: str, elapsed: float = 0.0) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.elapsed = elapsed
 
 
 conversations: dict[str, Conversation] = {}
@@ -292,23 +325,14 @@ async def generate_response(
         f"model: {conversation.model}\nsystem_prompt: \n{system_prompt}\nprompt: \n{prompt}"
     )
 
-    params = {
-        "temperature": randrange(75, 150) / 100,
-        "top_p": randrange(5, 11) / 10,
-        "top_k": randrange(1, 1024),
-        "seed": randrange(1, 1024),
-    }
+    params = {"temperature": TEMPERATURE, "top_p": TOP_P}
 
-    logging.debug(
-        f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
-    )
+    logging.debug(f"generating with parameters: {params}")
     current_time = datetime.datetime.now()
     permalog(
         f"generating message in channel {channel_name}'s channel at {current_time}\n"
     )
-    permalog(
-        f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
-    )
+    permalog(f"generating with parameters: {params}\n")
 
     if generation_id is None:
         generation_id = str(uuid.uuid4())
@@ -392,8 +416,6 @@ async def generate_response(
 # more. Bounded: resampling cures stochastic drops, never structural failures.
 EMPTY_ROLLS = 2
 
-FALLBACK_TEXT = "I couldn't generate a response. Please try again."
-
 
 async def generate(
     prompt: str = "",
@@ -407,7 +429,7 @@ async def generate(
         completion = await _generate_once(
             prompt=prompt, model=model, system_prompt=system_prompt, params=params
         )
-        completion = replace(completion, attempts=roll)
+        completion = replace(completion, attempts=roll, params=dict(params or {}))
         if not completion.is_empty:
             return completion
         logging.warning(
@@ -423,10 +445,11 @@ async def _generate_once(
     system_prompt: str,
     params: dict | None,
 ) -> Completion:
-    """One call to OpenRouter's chat completions, with HTTP-level retries."""
+    """One call to OpenRouter's chat completions. One attempt, real timeout;
+    any failure raises GenerationFailed (see REQUEST_TIMEOUT)."""
 
     if params is None:
-        params = {"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666}
+        params = {"temperature": TEMPERATURE, "top_p": TOP_P}
 
     session = await get_session()
 
@@ -435,72 +458,66 @@ async def _generate_once(
         {"role": "user", "content": prompt},
     ]
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        started = time.monotonic()
-        try:
-            async with session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
-                    "HTTP-Referer": os.getenv(
-                        "SITE_URL", "https://github.com/transfaeries/faebot-twitch"
-                    ),
-                    "X-Title": "Faebot Twitch",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": params.get("temperature", 0.7),
-                    # Answer budget plus the reasoning's own room on top.
-                    "max_tokens": GENERATION_CAP + REASONING_CAP,
-                    "reasoning": {"max_tokens": REASONING_CAP},
-                    "top_p": params.get("top_p", 1.0),
-                },
-            ) as response:
-                if response.status == 429 or response.status >= 500:
-                    retry_after = min(2**attempt, 8)
-                    logging.warning(
-                        f"OpenRouter returned {response.status}, "
-                        f"retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})"
-                    )
-                    await asyncio.sleep(retry_after)
-                    continue
+    started = time.monotonic()
+    try:
+        async with session.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
+                "HTTP-Referer": os.getenv(
+                    "SITE_URL", "https://github.com/transfaeries/faebot-twitch"
+                ),
+                "X-Title": "Faebot Twitch",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "temperature": params.get("temperature", TEMPERATURE),
+                "top_p": params.get("top_p", TOP_P),
+                # Answer budget plus the reasoning's own room on top.
+                "max_tokens": GENERATION_CAP + REASONING_CAP,
+                "reasoning": {"max_tokens": REASONING_CAP},
+            },
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        ) as response:
+            elapsed = time.monotonic() - started
+            if response.status >= 400:
+                body = (await response.text())[:400]
+                raise GenerationFailed(
+                    f"OpenRouter returned {response.status}: {body}", elapsed
+                )
 
-                if response.status >= 400:
-                    body = await response.text()
-                    logging.error(f"OpenRouter returned {response.status}: {body}")
-                    return Completion(text=FALLBACK_TEXT, model=model)
+            result = await response.json()
+            elapsed = time.monotonic() - started
 
-                result = await response.json()
-                elapsed = time.monotonic() - started
-
-                if "choices" in result and len(result["choices"]) > 0:
-                    choice = result["choices"][0]
-                    message = choice.get("message") or {}
-                    return Completion(
-                        text=str(message.get("content") or ""),
-                        reasoning=str(message.get("reasoning") or ""),
-                        elapsed=elapsed,
-                        finish_reason=str(choice.get("finish_reason") or ""),
-                        model=str(result.get("model") or model),
-                        usage=result.get("usage") or {},
-                    )
-                else:
-                    logging.error(
-                        f"Unexpected response format from OpenRouter: {result}"
-                    )
-                    return Completion(text=FALLBACK_TEXT, model=model)
-
-        except (aiohttp.ClientError, ValueError, asyncio.TimeoutError) as e:
-            retry_after = min(2**attempt, 8)
-            logging.warning(
-                f"Network/parse error calling OpenRouter: {type(e).__name__}: {e}, "
-                f"retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})"
+            try:
+                choice = result["choices"][0]
+            except (KeyError, IndexError, TypeError):
+                raise GenerationFailed(
+                    f"OpenRouter returned no choices: {str(result)[:200]}", elapsed
+                ) from None
+            message = choice.get("message") or {}
+            return Completion(
+                text=str(message.get("content") or ""),
+                reasoning=str(message.get("reasoning") or ""),
+                elapsed=elapsed,
+                finish_reason=str(choice.get("finish_reason") or ""),
+                model=str(result.get("model") or model),
+                provider=str(result.get("provider") or ""),
+                usage=result.get("usage") or {},
             )
-            await asyncio.sleep(retry_after)
-            continue
 
-    logging.error(f"OpenRouter API call failed after {max_retries} attempts")
-    raise Exception(f"OpenRouter API call failed after {max_retries} attempts")
+    except GenerationFailed:
+        raise
+    except asyncio.TimeoutError:
+        elapsed = time.monotonic() - started
+        raise GenerationFailed(
+            f"OpenRouter timed out after {elapsed:.0f}s (limit {REQUEST_TIMEOUT:.0f}s)",
+            elapsed,
+        ) from None
+    except (aiohttp.ClientError, ValueError) as error:
+        elapsed = time.monotonic() - started
+        raise GenerationFailed(
+            f"OpenRouter call failed: {type(error).__name__}: {error}", elapsed
+        ) from error

@@ -231,15 +231,61 @@ class TestGenerate:
             await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_429_raises_without_retrying(self):
+    async def test_429_gets_exactly_one_immediate_retry(self, monkeypatch):
+        """A shared-pool rate limit clears in a second: one retry, on 429
+        only, then it's a failure like any other."""
+        monkeypatch.setattr(core, "RATE_LIMIT_RETRY_DELAY", 0)
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 status=429,
                 payload={"error": "rate limited"},
             )
-            with pytest.raises(core.GenerationFailed, match="429"):
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "recovered"}}]},
+            )
+            result = await core.generate(prompt="hello")
+            assert result.text == "recovered"
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 2
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_429_twice_fails_after_the_one_retry(self, monkeypatch):
+        monkeypatch.setattr(core, "RATE_LIMIT_RETRY_DELAY", 0)
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=429,
+                payload={"error": "rate limited"},
+                repeat=True,
+            )
+            with pytest.raises(core.GenerationFailed, match="429") as info:
                 await core.generate(prompt="hello")
+            assert info.value.is_rate_limit
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 2
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_504_does_not_retry(self):
+        """Only 429 retries; an upstream abort (OpenRouter's 504) is final."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=504,
+                payload={"error": {"message": "The operation was aborted"}},
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "never reached"}}]},
+            )
+            with pytest.raises(core.GenerationFailed, match="504") as info:
+                await core.generate(prompt="hello")
+            assert not info.value.is_rate_limit
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 1
             await core.close_session()
 
     @pytest.mark.asyncio
@@ -261,6 +307,9 @@ class TestGenerate:
             with pytest.raises(core.GenerationFailed, match="timed out") as info:
                 await core.generate(prompt="hello")
             assert info.value.elapsed >= 0
+            assert not info.value.is_rate_limit
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 1
             await core.close_session()
 
     @pytest.mark.asyncio

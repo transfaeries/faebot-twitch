@@ -51,6 +51,12 @@ TOP_P = float(os.getenv("TOP_P", "0.95"))
 # is reported to the dashboard and the capture, never spoken in faebot's voice.
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "90"))
 
+# The one exception to one-attempt: a 429. OpenRouter's shared Moonshot
+# pool rate-limited three asks on the 08-21 stream, and a shared-pool 429
+# clears in about a second — unlike a timeout, which never does. So: ONE
+# immediate retry, on 429 only, after a short pause. Nothing else retries.
+RATE_LIMIT_RETRY_DELAY = float(os.getenv("RATE_LIMIT_RETRY_DELAY", "1.0"))
+
 
 @dataclass
 class Conversation:
@@ -143,10 +149,17 @@ class GenerationFailed(Exception):
     silence: this is the call failing. Carries `elapsed` so a failure is
     still a data point."""
 
-    def __init__(self, reason: str, elapsed: float = 0.0) -> None:
+    def __init__(
+        self, reason: str, elapsed: float = 0.0, status: int | None = None
+    ) -> None:
         super().__init__(reason)
         self.reason = reason
         self.elapsed = elapsed
+        self.status = status
+
+    @property
+    def is_rate_limit(self) -> bool:
+        return self.status == 429
 
 
 conversations: dict[str, Conversation] = {}
@@ -426,9 +439,20 @@ async def generate(
     """Generate a Completion with the OpenRouter API, rolling again on an
     empty answer channel."""
     for roll in range(1, EMPTY_ROLLS + 1):
-        completion = await _generate_once(
-            prompt=prompt, model=model, system_prompt=system_prompt, params=params
-        )
+        try:
+            completion = await _generate_once(
+                prompt=prompt, model=model, system_prompt=system_prompt, params=params
+            )
+        except GenerationFailed as failure:
+            if not failure.is_rate_limit:
+                raise
+            logging.warning(
+                f"rate-limited (429) — one retry in {RATE_LIMIT_RETRY_DELAY:g}s"
+            )
+            await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
+            completion = await _generate_once(
+                prompt=prompt, model=model, system_prompt=system_prompt, params=params
+            )
         completion = replace(completion, attempts=roll, params=dict(params or {}))
         if not completion.is_empty:
             return completion
@@ -446,7 +470,8 @@ async def _generate_once(
     params: dict | None,
 ) -> Completion:
     """One call to OpenRouter's chat completions. One attempt, real timeout;
-    any failure raises GenerationFailed (see REQUEST_TIMEOUT)."""
+    any failure raises GenerationFailed (see REQUEST_TIMEOUT). The single
+    429 retry lives in generate(), which is the caller that decides policy."""
 
     if params is None:
         params = {"temperature": TEMPERATURE, "top_p": TOP_P}
@@ -485,7 +510,9 @@ async def _generate_once(
             if response.status >= 400:
                 body = (await response.text())[:400]
                 raise GenerationFailed(
-                    f"OpenRouter returned {response.status}: {body}", elapsed
+                    f"OpenRouter returned {response.status}: {body}",
+                    elapsed,
+                    status=response.status,
                 )
 
             result = await response.json()

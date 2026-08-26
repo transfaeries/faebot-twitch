@@ -152,7 +152,11 @@ class TestBuildSystemPrompt:
         prompt = core.build_system_prompt(
             conversation, "testchannel", "Title", "Game", []
         )
-        assert "42" in prompt
+        assert "between the last 34 and 42 messages" in prompt
+
+    @pytest.mark.parametrize("limit,floor", [(50, 40), (10, 8), (4, 4)])
+    def test_history_floor_drops_a_fifth(self, limit, floor):
+        assert core.history_floor(limit) == floor
 
 
 # ── the silence sentinel ─────────────────────────────────────────────
@@ -466,17 +470,20 @@ class TestGenerateResponse:
         await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_trims_chatlog_to_history_length(self, conversation):
-        conversation.history = 5
-        conversation.chatlog = [f"msg{i}" for i in range(10)]
+    async def test_trims_chatlog_in_a_block(self, conversation):
+        """Over the limit → cut back to the floor (10 - 10//5 = 8), so the
+        prompt prefix stays put for the next couple of calls."""
+        conversation.history = 10
+        conversation.chatlog = [f"msg{i}" for i in range(20)]
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 payload={"choices": [{"message": {"content": "reply"}}]},
             )
             await core.generate_response("testchannel")
-        # 5 kept from trim + 1 appended response
-        assert len(conversation.chatlog) == 6
+        # 8 kept from trim + 1 appended response
+        assert len(conversation.chatlog) == 9
+        assert conversation.chatlog[0] == "msg12"
         await core.close_session()
 
     @pytest.mark.asyncio

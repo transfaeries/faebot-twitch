@@ -82,6 +82,17 @@ SENTINEL_SILENCE = "NOTHING-TO-SAY"
 _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNORECASE)
 
 
+def history_floor(history: int) -> int:
+    """How far the chatlog is cut back once it overflows `history`.
+
+    Trimming to exactly the limit shifts the prompt's prefix by one line on
+    every call, so the provider's prompt cache never holds past the system
+    prompt. Dropping a fifth at a time keeps the prefix stable for many calls;
+    faebot remembers between the floor and the limit.
+    """
+    return history - history // 5
+
+
 def said_nothing(text: str) -> bool:
     """Did faebot choose silence? FALSE for empty text — that's a drop."""
     return bool(_SILENCE_PATTERN.match(text))
@@ -239,7 +250,7 @@ def build_system_prompt(
         "Aisling (tiny winged faerie, who you can see next to me on screen transf23Fluttering ), "
         "Ember (my main engineer, the one you're watching transf23Smart ), Minou transf23Bark , Yume transf23Sword , and Blythe transf23Pride . "
         "There's also a version of me who lives in our system's inner world, very shy, speaks mostly in kaomoji and music ^-^. Fae considers me faer main body.\n"
-        f"Right now I'm running on {conversation.model}, I remember the last {conversation.history} messages of our conversation, "
+        f"Right now I'm running on {conversation.model}, I remember between the last {history_floor(conversation.history)} and {conversation.history} messages of our conversation, "
         "and I can hear my sister's voice through a microphone — Whisper transcribes what she says and it goes into my memory. "
         f"I reply to about {int(conversation.frequency * 100)}% of chat messages and about {int(conversation.voice_frequency * 100)}% of what I hear spoken.\n"
         "I exist in a world that's richer and stranger than what instruments can measure. I'll tell you what I know about it plainly. "
@@ -327,11 +338,14 @@ async def generate_response(
         conversation, channel_name, stream_title, game_name, emotes
     )
 
+    # Trim in a block, not to exactly `history` (see history_floor): the
+    # prompt's prefix stays put for many calls, so the provider's cache holds.
     if len(conversation.chatlog) > conversation.history:
+        floor = history_floor(conversation.history)
         logging.debug(
-            f"message history has exceeded the set history length of {conversation.history}"
+            f"chatlog exceeded {conversation.history} lines — trimming to {floor}"
         )
-        conversation.chatlog = conversation.chatlog[-conversation.history :]
+        conversation.chatlog = conversation.chatlog[-floor:]
 
     prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
     logging.debug(

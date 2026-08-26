@@ -277,6 +277,26 @@ def build_system_prompt(
     )
 
 
+# Whisper is primed with our names (`initial_prompt`) so it spells them right,
+# and on near-silent audio it hallucinates that prompt back — sometimes twice,
+# sometimes with punctuation, sometimes with an "and". A plain substring test
+# let ~170 such lines through in August, and faebot kept hearing faer name
+# when nobody had said it. An echo is a line with NOTHING in it but the
+# prompt's words (and filler); a real sentence always has more.
+_ECHO_FILLER = {"and", "the", "oh", "a"}
+
+
+def is_prompt_echo(text: str, prompt: str) -> bool:
+    """Is this transcription just Whisper repeating its own prompt (or
+    nothing at all)? Speech in another script is not an echo — whether it
+    is real is a different question, left alone here."""
+    words = re.findall(r"\w+", text.lower())
+    if not words:
+        return True  # punctuation only
+    prompt_words = set(re.findall(r"\w+", prompt.lower()))
+    return all(word in prompt_words or word in _ECHO_FILLER for word in words)
+
+
 def fix_emote_spacing(text: str, emotes: list[str]) -> str:
     """Ensure emotes are surrounded by whitespace so Twitch renders them."""
     if not emotes:

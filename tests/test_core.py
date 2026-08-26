@@ -159,6 +159,44 @@ class TestBuildSystemPrompt:
         assert core.history_floor(limit) == floor
 
 
+# ── the whisper prompt echo ──────────────────────────────────────────
+
+
+class TestIsPromptEcho:
+    PROMPT = "faebot, transfaeries"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "faebot, transfaeries",
+            "faebot, transfaeries  faebot, transfaeries",
+            "Faebot.",
+            "faebot!",
+            "and faebot, transfaeries",
+            "the faebot transfaeries",
+            "",
+            "...",
+        ],
+    )
+    def test_echoes(self, text):
+        assert core.is_prompt_echo(text, self.PROMPT)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "hello faebot, can you hear me?",
+            "faebot dearest",
+            "thank you faebot",
+            "I love speedruns, faebot",
+            "and guess who else is back, faebot is back",
+            "we heal at least",
+            "ようこそ",  # another script is not an echo (a different question)
+        ],
+    )
+    def test_real_speech(self, text):
+        assert not core.is_prompt_echo(text, self.PROMPT)
+
+
 # ── the silence sentinel ─────────────────────────────────────────────
 
 

@@ -410,6 +410,10 @@ class TestGenerate:
         assert body["model"] == "some/model"
         assert body["reasoning"] == {"max_tokens": core.REASONING_CAP}
         assert body["max_tokens"] == core.GENERATION_CAP + core.REASONING_CAP
+        assert body["provider"] == {
+            "order": list(core.PROVIDERS),
+            "allow_fallbacks": False,
+        }
         await core.close_session()
 
     @pytest.mark.asyncio

@@ -57,6 +57,17 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "90"))
 # immediate retry, on 429 only, after a short pause. Nothing else retries.
 RATE_LIMIT_RETRY_DELAY = float(os.getenv("RATE_LIMIT_RETRY_DELAY", "1.0"))
 
+# Provider pinning, for the prompt cache and for the reasoning channel: only
+# some OpenRouter providers cache the prompt (on the 08-21 stream, unpinned:
+# Modal 32/35 calls hit, Moonshot 10/14, nine other providers 0/28), and some
+# serve kimi-k3 without reasoning at all. Comma-separated OpenRouter provider
+# slugs, tried in order, no fallback to the field; empty = route freely.
+PROVIDERS = tuple(
+    slug.strip()
+    for slug in os.getenv("OPENROUTER_PROVIDERS", "moonshotai,modal").split(",")
+    if slug.strip()
+)
+
 
 @dataclass
 class Conversation:
@@ -517,6 +528,11 @@ async def _generate_once(
                 # Answer budget plus the reasoning's own room on top.
                 "max_tokens": GENERATION_CAP + REASONING_CAP,
                 "reasoning": {"max_tokens": REASONING_CAP},
+                **(
+                    {"provider": {"order": list(PROVIDERS), "allow_fallbacks": False}}
+                    if PROVIDERS
+                    else {}
+                ),
             },
             timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
         ) as response:

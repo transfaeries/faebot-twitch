@@ -311,8 +311,54 @@ class TestGenerate:
             await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_504_does_not_retry(self):
-        """Only 429 retries; an upstream abort (OpenRouter's 504) is final."""
+    async def test_504_retries_once_on_the_rest_of_the_pinned_list(self, monkeypatch):
+        """An upstream drop is retried ONCE, aimed at the pinned providers
+        after the one that dropped — never outside the pin."""
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai", "modal"))
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=504,
+                payload={"error": {"message": "The operation was aborted"}},
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "caught by modal"}}]},
+            )
+            result = await core.generate(prompt="hello")
+            assert result.text == "caught by modal"
+            sent = [
+                c.kwargs["json"] for calls in mocked.requests.values() for c in calls
+            ]
+            assert len(sent) == 2
+            assert sent[0]["provider"]["order"] == ["moonshotai", "modal"]
+            assert sent[1]["provider"] == {"order": ["modal"], "allow_fallbacks": False}
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_504_inside_a_200_body_counts_as_a_drop(self, monkeypatch):
+        """OpenRouter answers 200 with `{"error": {"code": 504}}` when the
+        upstream aborts mid-call; that is the drop we actually see."""
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai", "modal"))
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "error": {"message": "The operation was aborted", "code": 504}
+                },
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "caught by modal"}}]},
+            )
+            result = await core.generate(prompt="hello")
+            assert result.text == "caught by modal"
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_504_with_nowhere_else_to_go_is_final(self, monkeypatch):
+        """One pinned provider: a drop has no second address, so it fails."""
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai",))
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -325,7 +371,7 @@ class TestGenerate:
             )
             with pytest.raises(core.GenerationFailed, match="504") as info:
                 await core.generate(prompt="hello")
-            assert not info.value.is_rate_limit
+            assert info.value.is_upstream_drop and not info.value.is_rate_limit
             calls = sum(len(c) for c in mocked.requests.values())
             assert calls == 1
             await core.close_session()

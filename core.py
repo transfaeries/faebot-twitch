@@ -57,6 +57,14 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "90"))
 # immediate retry, on 429 only, after a short pause. Nothing else retries.
 RATE_LIMIT_RETRY_DELAY = float(os.getenv("RATE_LIMIT_RETRY_DELAY", "1.0"))
 
+# The other exception: an upstream drop. Moonshot times out on a few asks a
+# night (a 504 — sometimes as an HTTP status, sometimes inside a 200 body:
+# `{"error": {"code": 504}}`). OpenRouter only walks the provider order when
+# a host is down at routing time, so a drop mid-call never reaches the next
+# pinned provider on its own. We do that ourselves: ONE retry, aimed at the
+# rest of the pinned list, never outside it. A cold cache beats a lost ask.
+UPSTREAM_DROP_STATUSES = (502, 503, 504)
+
 # Provider pinning, for the prompt cache and for the reasoning channel: only
 # some OpenRouter providers cache the prompt (on the 08-21 stream, unpinned:
 # Modal 32/35 calls hit, Moonshot 10/14, nine other providers 0/28), and some
@@ -182,6 +190,10 @@ class GenerationFailed(Exception):
     @property
     def is_rate_limit(self) -> bool:
         return self.status == 429
+
+    @property
+    def is_upstream_drop(self) -> bool:
+        return self.status in UPSTREAM_DROP_STATUSES
 
 
 conversations: dict[str, Conversation] = {}
@@ -489,15 +501,31 @@ async def generate(
                 prompt=prompt, model=model, system_prompt=system_prompt, params=params
             )
         except GenerationFailed as failure:
-            if not failure.is_rate_limit:
+            if failure.is_rate_limit:
+                logging.warning(
+                    f"rate-limited (429) — one retry in {RATE_LIMIT_RETRY_DELAY:g}s"
+                )
+                await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
+                completion = await _generate_once(
+                    prompt=prompt,
+                    model=model,
+                    system_prompt=system_prompt,
+                    params=params,
+                )
+            elif failure.is_upstream_drop and len(PROVIDERS) > 1:
+                logging.warning(
+                    f"upstream drop ({failure.status}) — one retry on "
+                    f"{','.join(PROVIDERS[1:])}"
+                )
+                completion = await _generate_once(
+                    prompt=prompt,
+                    model=model,
+                    system_prompt=system_prompt,
+                    params=params,
+                    providers=PROVIDERS[1:],
+                )
+            else:
                 raise
-            logging.warning(
-                f"rate-limited (429) — one retry in {RATE_LIMIT_RETRY_DELAY:g}s"
-            )
-            await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
-            completion = await _generate_once(
-                prompt=prompt, model=model, system_prompt=system_prompt, params=params
-            )
         completion = replace(completion, attempts=roll, params=dict(params or {}))
         if not completion.is_empty:
             return completion
@@ -508,15 +536,27 @@ async def generate(
     return completion
 
 
+def _body_error_code(result: object) -> int | None:
+    """OpenRouter can answer 200 with `{"error": {"code": 504, ...}}` — the
+    upstream's status, carried in the body. Surface it so policy can see it."""
+    if isinstance(result, dict):
+        error = result.get("error")
+        if isinstance(error, dict) and isinstance(error.get("code"), int):
+            return int(error["code"])
+    return None
+
+
 async def _generate_once(
     prompt: str,
     model: str,
     system_prompt: str,
     params: dict | None,
+    providers: tuple[str, ...] = PROVIDERS,
 ) -> Completion:
     """One call to OpenRouter's chat completions. One attempt, real timeout;
-    any failure raises GenerationFailed (see REQUEST_TIMEOUT). The single
-    429 retry lives in generate(), which is the caller that decides policy."""
+    any failure raises GenerationFailed (see REQUEST_TIMEOUT). The 429 and
+    upstream-drop retries live in generate(), the caller that decides policy;
+    `providers` is how a retry is aimed at the rest of the pinned list."""
 
     if params is None:
         params = {"temperature": TEMPERATURE, "top_p": TOP_P}
@@ -549,8 +589,8 @@ async def _generate_once(
                 "max_tokens": GENERATION_CAP + REASONING_CAP,
                 "reasoning": {"max_tokens": REASONING_CAP},
                 **(
-                    {"provider": {"order": list(PROVIDERS), "allow_fallbacks": False}}
-                    if PROVIDERS
+                    {"provider": {"order": list(providers), "allow_fallbacks": False}}
+                    if providers
                     else {}
                 ),
             },
@@ -572,7 +612,9 @@ async def _generate_once(
                 choice = result["choices"][0]
             except (KeyError, IndexError, TypeError):
                 raise GenerationFailed(
-                    f"OpenRouter returned no choices: {str(result)[:200]}", elapsed
+                    f"OpenRouter returned no choices: {str(result)[:200]}",
+                    elapsed,
+                    status=_body_error_code(result),
                 ) from None
             message = choice.get("message") or {}
             return Completion(

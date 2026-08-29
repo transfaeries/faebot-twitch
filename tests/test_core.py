@@ -273,10 +273,14 @@ class TestGenerate:
             await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_429_gets_exactly_one_immediate_retry(self, monkeypatch):
-        """A shared-pool rate limit clears in a second: one retry, on 429
-        only, then it's a failure like any other."""
+    async def test_429_gets_exactly_one_retry_aimed_past_the_pool_that_said_no(
+        self, monkeypatch
+    ):
+        """A shared-pool rate limit clears in a second — but the pool that
+        said no is the one a same-list retry asks again (five asks lost that
+        way on 08-27). One retry, aimed at the rest of the pinned list."""
         monkeypatch.setattr(core, "RATE_LIMIT_RETRY_DELAY", 0)
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai", "modal"))
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -289,8 +293,36 @@ class TestGenerate:
             )
             result = await core.generate(prompt="hello")
             assert result.text == "recovered"
-            calls = sum(len(c) for c in mocked.requests.values())
-            assert calls == 2
+            sent = [
+                c.kwargs["json"] for calls in mocked.requests.values() for c in calls
+            ]
+            assert len(sent) == 2
+            assert sent[0]["provider"]["order"] == ["moonshotai", "modal"]
+            assert sent[1]["provider"] == {"order": ["modal"], "allow_fallbacks": False}
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_429_with_one_pinned_provider_still_retries_it(self, monkeypatch):
+        """Nowhere else to aim: the one retry asks the same provider again,
+        as it always did."""
+        monkeypatch.setattr(core, "RATE_LIMIT_RETRY_DELAY", 0)
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai",))
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=429,
+                payload={"error": "rate limited"},
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "recovered"}}]},
+            )
+            result = await core.generate(prompt="hello")
+            assert result.text == "recovered"
+            sent = [
+                c.kwargs["json"] for calls in mocked.requests.values() for c in calls
+            ]
+            assert [s["provider"]["order"] for s in sent] == [["moonshotai"]] * 2
             await core.close_session()
 
     @pytest.mark.asyncio

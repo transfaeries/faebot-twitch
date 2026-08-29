@@ -54,7 +54,10 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "90"))
 # The one exception to one-attempt: a 429. OpenRouter's shared Moonshot
 # pool rate-limited three asks on the 08-21 stream, and a shared-pool 429
 # clears in about a second — unlike a timeout, which never does. So: ONE
-# immediate retry, on 429 only, after a short pause. Nothing else retries.
+# retry, after a short pause — and aimed at the rest of the pinned list
+# when there is one, like the drop retry below: the pool that just said
+# no is the pool a same-list retry asks again (five asks lost that way on
+# the 08-27 stream). With a single pinned provider it asks the same one.
 RATE_LIMIT_RETRY_DELAY = float(os.getenv("RATE_LIMIT_RETRY_DELAY", "1.0"))
 
 # The other exception: an upstream drop. Moonshot times out on a few asks a
@@ -498,34 +501,33 @@ async def generate(
     for roll in range(1, EMPTY_ROLLS + 1):
         try:
             completion = await _generate_once(
-                prompt=prompt, model=model, system_prompt=system_prompt, params=params
+                prompt=prompt,
+                model=model,
+                system_prompt=system_prompt,
+                params=params,
+                providers=PROVIDERS,
             )
         except GenerationFailed as failure:
+            rest = PROVIDERS[1:] if len(PROVIDERS) > 1 else PROVIDERS
             if failure.is_rate_limit:
                 logging.warning(
                     f"rate-limited (429) — one retry in {RATE_LIMIT_RETRY_DELAY:g}s"
+                    f" on {','.join(rest) or 'any provider'}"
                 )
                 await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
-                completion = await _generate_once(
-                    prompt=prompt,
-                    model=model,
-                    system_prompt=system_prompt,
-                    params=params,
-                )
             elif failure.is_upstream_drop and len(PROVIDERS) > 1:
                 logging.warning(
-                    f"upstream drop ({failure.status}) — one retry on "
-                    f"{','.join(PROVIDERS[1:])}"
-                )
-                completion = await _generate_once(
-                    prompt=prompt,
-                    model=model,
-                    system_prompt=system_prompt,
-                    params=params,
-                    providers=PROVIDERS[1:],
+                    f"upstream drop ({failure.status}) — one retry on {','.join(rest)}"
                 )
             else:
                 raise
+            completion = await _generate_once(
+                prompt=prompt,
+                model=model,
+                system_prompt=system_prompt,
+                params=params,
+                providers=rest,
+            )
         completion = replace(completion, attempts=roll, params=dict(params or {}))
         if not completion.is_empty:
             return completion

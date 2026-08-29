@@ -259,6 +259,43 @@ header h1 {
     border-left-color: var(--color-error);
 }
 
+.gen-card.passed {
+    border-left-color: var(--color-secondary-dim);
+}
+
+.gen-card.passed .gen-response {
+    color: var(--color-secondary-dim);
+    font-style: italic;
+}
+
+/* The reasoning channel: a collapsed dropdown on the card. */
+.gen-reasoning {
+    margin-top: var(--space-sm);
+    font-size: 0.75rem;
+}
+
+.gen-reasoning[hidden] {
+    display: none;
+}
+
+.gen-reasoning summary {
+    color: var(--color-secondary-dim);
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.7rem;
+}
+
+.gen-reasoning pre {
+    margin-top: var(--space-sm);
+    background: var(--bg-surface);
+    padding: var(--space-sm);
+    border-radius: var(--radius);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
 .gen-header {
     display: flex;
     gap: var(--space-sm);

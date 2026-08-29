@@ -3,10 +3,11 @@ Core brain for faebot — conversation management, generation logic, reply decis
 No TwitchIO or FastAPI dependencies. Both bot.py and server.py import from here.
 """
 
-from typing import Optional
-from dataclasses import dataclass, field
-from random import randrange, random
+from typing import Any, Optional
+from dataclasses import dataclass, field, replace
+from random import random
 import os
+import time
 import aiohttp
 import asyncio
 import datetime
@@ -15,7 +16,68 @@ import re
 import uuid
 
 
-MODEL = os.getenv("MODEL", "google/gemini-2.5-flash")
+# Startup defaults, all env-readable. These are the *defaults* a fresh
+# Conversation starts from; the fae;freq / fae;hist mod commands still change
+# them live and those changes still don't persist across restarts (that is the
+# other half of the "runtime dials don't persist" item, not done here).
+MODEL = os.getenv("MODEL", "moonshotai/kimi-k3")
+HISTORY = int(os.getenv("HISTORY", "50"))
+FREQUENCY = float(os.getenv("FREQUENCY", "0.05"))
+VOICE_FREQUENCY = float(os.getenv("VOICE_FREQUENCY", "0.025"))
+
+# Token caps are SAFETY NETS, not instructions (fae, 2026-08-19). The model
+# has no view of its own budget at generation time — `max_tokens` is a
+# server-side guillotine, and the only thing that shapes length is the prompt.
+# So both caps sit well above anything a normal reply needs, and hitting one
+# is a log line to investigate (`finish_reason == "length"`), not a design.
+# The reasoning cap rides ON TOP of the answer cap (learned in faebot-core:
+# sharing one purse let deliberation eat the reply).
+GENERATION_CAP = int(os.getenv("GENERATION_CAP", "500"))
+REASONING_CAP = int(os.getenv("REASONING_CAP", "8000"))
+
+# Sampling is PINNED, not rolled (2026-08-21). The per-generation lottery
+# (temperature 0.75–1.5, top_p 0.5–1.0) dates from the gemini-flash era; on
+# kimi-k3 its hot corner (T >= 1.4 AND top_p = 1.0) produced word soup 4/4
+# times on the 08-20 stream — and Moonshot's own API reportedly ignores the
+# values anyway, so the lottery was never an honest experiment. These are
+# Moonshot's published defaults for k3. Moods, if faebot wants them, get
+# designed on purpose later, not inherited from dice.
+TEMPERATURE = float(os.getenv("TEMPERATURE", "1.0"))
+TOP_P = float(os.getenv("TOP_P", "0.95"))
+
+# One request, one chance. A reply that arrives after a retry cycle arrives
+# after the moment (the 08-20 "Oops" messages landed fifteen minutes late:
+# aiohttp's 300s default × 3 retries). No retries; a real timeout; a failure
+# is reported to the dashboard and the capture, never spoken in faebot's voice.
+REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "90"))
+
+# The one exception to one-attempt: a 429. OpenRouter's shared Moonshot
+# pool rate-limited three asks on the 08-21 stream, and a shared-pool 429
+# clears in about a second — unlike a timeout, which never does. So: ONE
+# retry, after a short pause — and aimed at the rest of the pinned list
+# when there is one, like the drop retry below: the pool that just said
+# no is the pool a same-list retry asks again (five asks lost that way on
+# the 08-27 stream). With a single pinned provider it asks the same one.
+RATE_LIMIT_RETRY_DELAY = float(os.getenv("RATE_LIMIT_RETRY_DELAY", "1.0"))
+
+# The other exception: an upstream drop. Moonshot times out on a few asks a
+# night (a 504 — sometimes as an HTTP status, sometimes inside a 200 body:
+# `{"error": {"code": 504}}`). OpenRouter only walks the provider order when
+# a host is down at routing time, so a drop mid-call never reaches the next
+# pinned provider on its own. We do that ourselves: ONE retry, aimed at the
+# rest of the pinned list, never outside it. A cold cache beats a lost ask.
+UPSTREAM_DROP_STATUSES = (502, 503, 504)
+
+# Provider pinning, for the prompt cache and for the reasoning channel: only
+# some OpenRouter providers cache the prompt (on the 08-21 stream, unpinned:
+# Modal 32/35 calls hit, Moonshot 10/14, nine other providers 0/28), and some
+# serve kimi-k3 without reasoning at all. Comma-separated OpenRouter provider
+# slugs, tried in order, no fallback to the field; empty = route freely.
+PROVIDERS = tuple(
+    slug.strip()
+    for slug in os.getenv("OPENROUTER_PROVIDERS", "moonshotai,modal").split(",")
+    if slug.strip()
+)
 
 
 @dataclass
@@ -24,11 +86,117 @@ class Conversation:
 
     channel: str
     chatlog: list = field(default_factory=list)
-    frequency: float = 0.05
-    voice_frequency: float = 0.025
-    history: int = 20
+    frequency: float = FREQUENCY
+    voice_frequency: float = VOICE_FREQUENCY
+    history: int = HISTORY
     model: str = MODEL
     silenced: bool = False
+
+
+# THE silence sentinel: chosen silence must be SAID, so it can never be
+# confused with a dropped payload (empty content). A coined hyphenated phrase,
+# the same grammar as faebot-core's NOTHING-TO-RECORD, because a coined phrase
+# has no natural collisions — which is what lets matching be case-insensitive.
+# Anchored at the start of the reply; whatever follows it is faebot's reason
+# for passing, which is kept (captured, shown) but never posted. (The two
+# sentinels want one home eventually; noted in core-roadmap.)
+SENTINEL_SILENCE = "NOTHING-TO-SAY"
+_SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNORECASE)
+
+
+def history_floor(history: int) -> int:
+    """How far the chatlog is cut back once it overflows `history`.
+
+    Trimming to exactly the limit shifts the prompt's prefix by one line on
+    every call, so the provider's prompt cache never holds past the system
+    prompt. Dropping a fifth at a time keeps the prefix stable for many calls;
+    faebot remembers between the floor and the limit.
+    """
+    return history - history // 5
+
+
+def said_nothing(text: str) -> bool:
+    """Did faebot choose silence? FALSE for empty text — that's a drop."""
+    return bool(_SILENCE_PATTERN.match(text))
+
+
+def pass_reason(text: str) -> str:
+    """What faebot said after the sentinel, if anything — faer reason."""
+    return _SILENCE_PATTERN.sub("", text, count=1).strip()
+
+
+@dataclass(frozen=True)
+class Completion:
+    """One generation, and how it came to be.
+
+    `text` is the answer channel and `reasoning` a separate one the model may
+    think in — kept apart (same shape as faebot-core's Completion) because the
+    two go different places: text to chat, reasoning to the dashboard and the
+    capture. `elapsed`/`finish_reason`/`usage` are kept so the capture file
+    doubles as latency data we can read after a stream.
+    """
+
+    text: str
+    reasoning: str = ""
+    elapsed: float = 0.0
+    finish_reason: str = ""
+    model: str = ""
+    provider: str = ""
+    usage: dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
+    attempts: int = 1
+
+    @property
+    def is_empty(self) -> bool:
+        """An empty answer channel is a DROPPED PAYLOAD, never chosen silence —
+        reasoning models cause it by answering into `reasoning` instead."""
+        return not self.text.strip()
+
+    @property
+    def passed(self) -> bool:
+        """faebot chose silence (said the sentinel). Nothing gets posted."""
+        return said_nothing(self.text)
+
+    @property
+    def reason_for_passing(self) -> str:
+        return pass_reason(self.text) if self.passed else ""
+
+    def capture_meta(self) -> dict[str, Any]:
+        """The provenance fields worth writing alongside faebot's utterance."""
+        return {
+            "reasoning": self.reasoning,
+            "elapsed": self.elapsed,
+            "finish_reason": self.finish_reason,
+            "model": self.model,
+            "provider": self.provider,
+            "params": self.params,
+            "usage": self.usage,
+            "attempts": self.attempts,
+        }
+
+
+class GenerationFailed(Exception):
+    """The generating service could not be reached, or would not answer.
+
+    Distinct from an empty Completion (a dropped payload) and from chosen
+    silence: this is the call failing. Carries `elapsed` so a failure is
+    still a data point."""
+
+    def __init__(
+        self, reason: str, elapsed: float = 0.0, status: int | None = None
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.elapsed = elapsed
+        self.status = status
+
+    @property
+    def is_rate_limit(self) -> bool:
+        return self.status == 429
+
+    @property
+    def is_upstream_drop(self) -> bool:
+        return self.status in UPSTREAM_DROP_STATUSES
 
 
 conversations: dict[str, Conversation] = {}
@@ -108,7 +276,7 @@ def build_system_prompt(
         "Aisling (tiny winged faerie, who you can see next to me on screen transf23Fluttering ), "
         "Ember (my main engineer, the one you're watching transf23Smart ), Minou transf23Bark , Yume transf23Sword , and Blythe transf23Pride . "
         "There's also a version of me who lives in our system's inner world, very shy, speaks mostly in kaomoji and music ^-^. Fae considers me faer main body.\n"
-        f"Right now I'm running on {conversation.model}, I remember the last {conversation.history} messages of our conversation, "
+        f"Right now I'm running on {conversation.model}, I remember between the last {history_floor(conversation.history)} and {conversation.history} messages of our conversation, "
         "and I can hear my sister's voice through a microphone — Whisper transcribes what she says and it goes into my memory. "
         f"I reply to about {int(conversation.frequency * 100)}% of chat messages and about {int(conversation.voice_frequency * 100)}% of what I hear spoken.\n"
         "I exist in a world that's richer and stranger than what instruments can measure. I'll tell you what I know about it plainly. "
@@ -116,8 +284,32 @@ def build_system_prompt(
         "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings — a role I take seriously even when I'm being (un)silly about it.\n"
         f"Right now I'm hanging out in {channel_name}'s Twitch chat. The stream title is \"{stream_title}\" and fae's playing {game_name}. "
         f"I keep my messages short — just the last few things on my mind. "
+        f"I think before I speak. Chat moves fast, so I think quickly, but a moment's thought is fine. "
+        f"My messages are one line and fit in 500 characters. "
+        f"If I've nothing to add, or I'd rather just listen, I answer {SENTINEL_SILENCE} "
+        f"(I can say why after it, if I like) and nothing gets posted. "
         f"Emotes I can use: {emotes}. My favourite is transf23Botlove since it's literally a picture of me hugging a cyber-heart! I'm also transf23Yay transf23Generating"
     )
+
+
+# Whisper is primed with our names (`initial_prompt`) so it spells them right,
+# and on near-silent audio it hallucinates that prompt back — sometimes twice,
+# sometimes with punctuation, sometimes with an "and". A plain substring test
+# let ~170 such lines through in August, and faebot kept hearing faer name
+# when nobody had said it. An echo is a line with NOTHING in it but the
+# prompt's words (and filler); a real sentence always has more.
+_ECHO_FILLER = {"and", "the", "oh", "a"}
+
+
+def is_prompt_echo(text: str, prompt: str) -> bool:
+    """Is this transcription just Whisper repeating its own prompt (or
+    nothing at all)? Speech in another script is not an echo — whether it
+    is real is a different question, left alone here."""
+    words = re.findall(r"\w+", text.lower())
+    if not words:
+        return True  # punctuation only
+    prompt_words = set(re.findall(r"\w+", prompt.lower()))
+    return all(word in prompt_words or word in _ECHO_FILLER for word in words)
 
 
 def fix_emote_spacing(text: str, emotes: list[str]) -> str:
@@ -170,10 +362,10 @@ async def generate_response(
     events: Optional[asyncio.Queue] = None,
     trigger_type: str = "chat",
     generation_id: Optional[str] = None,
-) -> str:
-    """Build prompt, call the API, return the response text.
+) -> Completion:
+    """Build prompt, call the API, return the Completion (text + reasoning).
 
-    The caller is responsible for sending the response to chat
+    The caller is responsible for sending `.text` to chat
     and for fetching stream_title/game_name from TwitchIO.
 
     If `events` is provided, this emits `generating` and (on API failure)
@@ -192,34 +384,28 @@ async def generate_response(
         conversation, channel_name, stream_title, game_name, emotes
     )
 
+    # Trim in a block, not to exactly `history` (see history_floor): the
+    # prompt's prefix stays put for many calls, so the provider's cache holds.
     if len(conversation.chatlog) > conversation.history:
+        floor = history_floor(conversation.history)
         logging.debug(
-            f"message history has exceeded the set history length of {conversation.history}"
+            f"chatlog exceeded {conversation.history} lines — trimming to {floor}"
         )
-        conversation.chatlog = conversation.chatlog[-conversation.history :]
+        conversation.chatlog = conversation.chatlog[-floor:]
 
     prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
     logging.debug(
         f"model: {conversation.model}\nsystem_prompt: \n{system_prompt}\nprompt: \n{prompt}"
     )
 
-    params = {
-        "temperature": randrange(75, 150) / 100,
-        "top_p": randrange(5, 11) / 10,
-        "top_k": randrange(1, 1024),
-        "seed": randrange(1, 1024),
-    }
+    params = {"temperature": TEMPERATURE, "top_p": TOP_P}
 
-    logging.debug(
-        f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nseed: {params['seed']}"
-    )
+    logging.debug(f"generating with parameters: {params}")
     current_time = datetime.datetime.now()
     permalog(
         f"generating message in channel {channel_name}'s channel at {current_time}\n"
     )
-    permalog(
-        f"generating with parameters: \nTemperature:{params['temperature']}\nTop_k:{params['top_k']} \ntop_p: {params['top_p']}\nSeed: {params['seed']}\n"
-    )
+    permalog(f"generating with parameters: {params}\n")
 
     if generation_id is None:
         generation_id = str(uuid.uuid4())
@@ -241,7 +427,7 @@ async def generate_response(
     )
 
     try:
-        response = await generate(
+        completion = await generate(
             model=conversation.model,
             prompt=prompt,
             system_prompt=system_prompt,
@@ -259,8 +445,33 @@ async def generate_response(
         )
         raise
 
-    response = fix_emote_spacing(response, emotes)
-    logging.info(f"received response: {response}")
+    if completion.passed:
+        # Chosen silence. The reason (if fae gave one) is kept for the capture
+        # and the dashboard; the chatlog records only the fact, so fae
+        # remembers having chosen it without the reason being echoable.
+        logging.info(
+            f"faebot passed in {completion.elapsed:.1f}s"
+            f" — {completion.reason_for_passing or '(no reason given)'}"
+        )
+        permalog(f"faebot passed: {completion.reason_for_passing}\n")
+        conversation.chatlog.append("faebot: *stays quiet*")
+        return completion
+
+    response = fix_emote_spacing(completion.text, emotes)
+    logging.info(
+        f"received response in {completion.elapsed:.1f}s "
+        f"(finish_reason={completion.finish_reason!r}, attempts={completion.attempts}): {response}"
+    )
+    if completion.reasoning:
+        logging.debug(f"reasoning: {completion.reasoning}")
+    if completion.finish_reason == "length":
+        logging.warning(
+            "generation hit the token cap (finish_reason=length) \u2014 "
+            "the cap is a safety net; if this recurs, look at the prompt first"
+        )
+    # IRC messages are one line. kimi writes multi-line replies (gemini never
+    # did); fold them rather than let TwitchIO truncate at the first newline.
+    response = " ".join(line.strip() for line in response.splitlines() if line.strip())
     if len(response) > 499:
         logging.debug("generated content exceeded 500 characters, trimming.")
         response = response[:499] + "\u2013"
@@ -270,7 +481,13 @@ async def generate_response(
 
     conversation.chatlog.append(f"faebot: {response}")
 
-    return response
+    return replace(completion, text=response)
+
+
+# The answer channel coming back empty is a dropped payload (the model spoke
+# into `reasoning` and left `content` blank \u2014 kimi does this), so we roll once
+# more. Bounded: resampling cures stochastic drops, never structural failures.
+EMPTY_ROLLS = 2
 
 
 async def generate(
@@ -278,11 +495,73 @@ async def generate(
     model: str = MODEL,
     system_prompt: str = "",
     params: dict | None = None,
-) -> str:
-    """Generate completions with the OpenRouter API."""
+) -> Completion:
+    """Generate a Completion with the OpenRouter API, rolling again on an
+    empty answer channel."""
+    for roll in range(1, EMPTY_ROLLS + 1):
+        try:
+            completion = await _generate_once(
+                prompt=prompt,
+                model=model,
+                system_prompt=system_prompt,
+                params=params,
+                providers=PROVIDERS,
+            )
+        except GenerationFailed as failure:
+            rest = PROVIDERS[1:] if len(PROVIDERS) > 1 else PROVIDERS
+            if failure.is_rate_limit:
+                logging.warning(
+                    f"rate-limited (429) — one retry in {RATE_LIMIT_RETRY_DELAY:g}s"
+                    f" on {','.join(rest) or 'any provider'}"
+                )
+                await asyncio.sleep(RATE_LIMIT_RETRY_DELAY)
+            elif failure.is_upstream_drop and len(PROVIDERS) > 1:
+                logging.warning(
+                    f"upstream drop ({failure.status}) — one retry on {','.join(rest)}"
+                )
+            else:
+                raise
+            completion = await _generate_once(
+                prompt=prompt,
+                model=model,
+                system_prompt=system_prompt,
+                params=params,
+                providers=rest,
+            )
+        completion = replace(completion, attempts=roll, params=dict(params or {}))
+        if not completion.is_empty:
+            return completion
+        logging.warning(
+            f"empty answer channel (reasoning had {len(completion.reasoning)} chars) "
+            f"\u2014 rolling again ({roll}/{EMPTY_ROLLS})"
+        )
+    return completion
+
+
+def _body_error_code(result: object) -> int | None:
+    """OpenRouter can answer 200 with `{"error": {"code": 504, ...}}` — the
+    upstream's status, carried in the body. Surface it so policy can see it."""
+    if isinstance(result, dict):
+        error = result.get("error")
+        if isinstance(error, dict) and isinstance(error.get("code"), int):
+            return int(error["code"])
+    return None
+
+
+async def _generate_once(
+    prompt: str,
+    model: str,
+    system_prompt: str,
+    params: dict | None,
+    providers: tuple[str, ...] = PROVIDERS,
+) -> Completion:
+    """One call to OpenRouter's chat completions. One attempt, real timeout;
+    any failure raises GenerationFailed (see REQUEST_TIMEOUT). The 429 and
+    upstream-drop retries live in generate(), the caller that decides policy;
+    `providers` is how a retry is aimed at the rest of the pinned list."""
 
     if params is None:
-        params = {"top_k": 75, "top_p": 1, "temperature": 0.7, "seed": 666}
+        params = {"temperature": TEMPERATURE, "top_p": TOP_P}
 
     session = await get_session()
 
@@ -291,60 +570,75 @@ async def generate(
         {"role": "user", "content": prompt},
     ]
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            async with session.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
-                    "HTTP-Referer": os.getenv(
-                        "SITE_URL", "https://github.com/transfaeries/faebot-twitch"
-                    ),
-                    "X-Title": "Faebot Twitch",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": params.get("temperature", 0.7),
-                    "max_tokens": 150,
-                    "top_p": params.get("top_p", 1.0),
-                },
-            ) as response:
-                if response.status == 429 or response.status >= 500:
-                    retry_after = min(2**attempt, 8)
-                    logging.warning(
-                        f"OpenRouter returned {response.status}, "
-                        f"retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})"
-                    )
-                    await asyncio.sleep(retry_after)
-                    continue
+    started = time.monotonic()
+    try:
+        async with session.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENROUTER_KEY', '')}",
+                "HTTP-Referer": os.getenv(
+                    "SITE_URL", "https://github.com/transfaeries/faebot-twitch"
+                ),
+                "X-Title": "Faebot Twitch",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "temperature": params.get("temperature", TEMPERATURE),
+                "top_p": params.get("top_p", TOP_P),
+                # Answer budget plus the reasoning's own room on top.
+                "max_tokens": GENERATION_CAP + REASONING_CAP,
+                "reasoning": {"max_tokens": REASONING_CAP},
+                **(
+                    {"provider": {"order": list(providers), "allow_fallbacks": False}}
+                    if providers
+                    else {}
+                ),
+            },
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+        ) as response:
+            elapsed = time.monotonic() - started
+            if response.status >= 400:
+                body = (await response.text())[:400]
+                raise GenerationFailed(
+                    f"OpenRouter returned {response.status}: {body}",
+                    elapsed,
+                    status=response.status,
+                )
 
-                if response.status >= 400:
-                    body = await response.text()
-                    logging.error(f"OpenRouter returned {response.status}: {body}")
-                    return "I couldn't generate a response. Please try again."
+            result = await response.json()
+            elapsed = time.monotonic() - started
 
-                result = await response.json()
-
-                if "choices" in result and len(result["choices"]) > 0:
-                    reply = result["choices"][0]["message"]["content"]
-                    return str(reply)
-                else:
-                    logging.error(
-                        f"Unexpected response format from OpenRouter: {result}"
-                    )
-                    return "I couldn't generate a response. Please try again."
-
-        except (aiohttp.ClientError, ValueError, asyncio.TimeoutError) as e:
-            retry_after = min(2**attempt, 8)
-            logging.warning(
-                f"Network/parse error calling OpenRouter: {type(e).__name__}: {e}, "
-                f"retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})"
+            try:
+                choice = result["choices"][0]
+            except (KeyError, IndexError, TypeError):
+                raise GenerationFailed(
+                    f"OpenRouter returned no choices: {str(result)[:200]}",
+                    elapsed,
+                    status=_body_error_code(result),
+                ) from None
+            message = choice.get("message") or {}
+            return Completion(
+                text=str(message.get("content") or ""),
+                reasoning=str(message.get("reasoning") or ""),
+                elapsed=elapsed,
+                finish_reason=str(choice.get("finish_reason") or ""),
+                model=str(result.get("model") or model),
+                provider=str(result.get("provider") or ""),
+                usage=result.get("usage") or {},
             )
-            await asyncio.sleep(retry_after)
-            continue
 
-    logging.error(f"OpenRouter API call failed after {max_retries} attempts")
-    raise Exception(f"OpenRouter API call failed after {max_retries} attempts")
+    except GenerationFailed:
+        raise
+    except asyncio.TimeoutError:
+        elapsed = time.monotonic() - started
+        raise GenerationFailed(
+            f"OpenRouter timed out after {elapsed:.0f}s (limit {REQUEST_TIMEOUT:.0f}s)",
+            elapsed,
+        ) from None
+    except (aiohttp.ClientError, ValueError) as error:
+        elapsed = time.monotonic() - started
+        raise GenerationFailed(
+            f"OpenRouter call failed: {type(error).__name__}: {error}", elapsed
+        ) from error

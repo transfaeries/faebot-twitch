@@ -146,10 +146,92 @@ class TestGenerateAndSend:
         assert event["channel"] == "testchannel"
 
     @pytest.mark.asyncio
-    async def test_generation_failure_emits_error_and_fallback(
+    async def test_reasoning_reaches_capture_and_dashboard(
+        self, mock_faebot, mock_openrouter
+    ):
+        """The reasoning channel and the latency data ride along with the
+        utterance — into the capture (for memory faebot) and the response
+        event (for the dashboard) — while chat gets only the answer."""
+        core.ensure_conversation("testchannel")
+        mock_openrouter.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            payload={
+                "model": "moonshotai/kimi-k3",
+                "choices": [
+                    {
+                        "message": {"content": "hi!", "reasoning": "a greeting"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock()
+        mock_faebot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch("bot.capture.record_faebot_message") as record:
+            await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
+
+        mock_channel.send.assert_called_once_with("hi!")
+        record.assert_called_once()
+        meta = record.call_args.kwargs
+        assert meta["reasoning"] == "a greeting"
+        assert meta["finish_reason"] == "stop"
+        assert meta["model"] == "moonshotai/kimi-k3"
+        assert "elapsed" in meta
+
+        await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)  # generating
+        event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
+        assert event["type"] == "response"
+        assert event["text"] == "hi!"
+        assert event["reasoning"] == "a greeting"
+
+    @pytest.mark.asyncio
+    async def test_pass_sends_nothing_and_records_the_choice(
+        self, mock_faebot, mock_openrouter
+    ):
+        core.ensure_conversation("testchannel")
+        mock_openrouter.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            payload={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "NOTHING-TO-SAY, they're busy",
+                            "reasoning": "ember is mid-sentence",
+                        }
+                    }
+                ]
+            },
+        )
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock()
+        mock_faebot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch("bot.capture.record_faebot_pass") as record_pass, patch(
+            "bot.capture.record_faebot_message"
+        ) as record_message:
+            await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
+
+        mock_channel.send.assert_not_called()
+        record_message.assert_not_called()
+        record_pass.assert_called_once()
+        args, meta = record_pass.call_args
+        assert args == ("testchannel", "they're busy")
+        assert meta["reasoning"] == "ember is mid-sentence"
+
+        await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)  # generating
+        event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
+        assert event["type"] == "pass"
+        assert event["reason"] == "they're busy"
+
+    @pytest.mark.asyncio
+    async def test_generation_failure_posts_nothing_and_is_captured(
         self, mock_faebot, openrouter_error
     ):
-        """Generation failure should emit error event and send fallback message."""
+        """A machinery failure is not something faebot said: nothing goes to
+        chat (the old "Oops, something strange" fallback is gone); the error
+        event fires and the capture records `faebot_error`."""
         core.ensure_conversation("testchannel")
         openrouter_error(status=500, repeat=True)
 
@@ -157,20 +239,19 @@ class TestGenerateAndSend:
         mock_channel.send = AsyncMock()
         mock_faebot.get_channel = MagicMock(return_value=mock_channel)
 
-        await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
+        with patch("bot.capture.record_faebot_error") as record_error:
+            await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
 
-        # Check fallback message was sent
-        mock_channel.send.assert_called()
-        fallback_call = mock_channel.send.call_args
-        assert (
-            "oops" in fallback_call[0][0].lower()
-            or "strange" in fallback_call[0][0].lower()
-        )
+        mock_channel.send.assert_not_called()
+        record_error.assert_called_once()
+        args, meta = record_error.call_args
+        assert args[0] == "testchannel"
+        assert "500" in args[1]
+        assert meta["trigger_type"] == "chat"
+        assert "elapsed" in meta
 
-        # Check error event was emitted (skip the generating event)
         event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
         assert event["type"] == "generating"
-
         event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
         assert event["type"] == "error"
 

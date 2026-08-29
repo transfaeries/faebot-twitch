@@ -14,6 +14,7 @@ import logging
 import uvicorn
 import numpy as np
 import torch
+import core
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
@@ -107,8 +108,18 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
         if model is None:
             raise RuntimeError("Whisper model not loaded")
         segments, info = model.transcribe(audio, initial_prompt=initial_prompt)
+        segments = list(segments)
         text = " ".join(segment.text for segment in segments).strip()
-        return text, info
+        # Whisper's own estimate that a segment is not speech — captured so
+        # the prompt-echo problem can be studied against real numbers.
+        no_speech_prob = (
+            max(
+                (getattr(segment, "no_speech_prob", 0.0) or 0.0) for segment in segments
+            )
+            if segments
+            else None
+        )
+        return text, info, no_speech_prob
 
     def _rebuild_executor():
         """Abandon a stuck executor thread and create a fresh one (keeps the model)."""
@@ -184,9 +195,6 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
     async def audio_websocket(websocket: WebSocket) -> None:
         """WebSocket endpoint for receiving audio data and performing VAD."""
         initial_prompt = "faebot, transfaeries"
-        # Whisper sometimes echoes back substrings of the prompt instead of real speech.
-        # Substring check is intentional — catches partial echoes like "faebot" or "transfaeries".
-        prompt_echo_source = initial_prompt
         try:
             logging.debug("WebSocket handler entered")
             await websocket.accept()
@@ -263,7 +271,7 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
 
                             try:
                                 loop = asyncio.get_event_loop()
-                                text, info = await asyncio.wait_for(
+                                text, info, no_speech_prob = await asyncio.wait_for(
                                     loop.run_in_executor(
                                         whisper_state["executor"],
                                         _transcribe_sync,
@@ -288,7 +296,7 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
                                 speech_buffer = []
                                 continue
 
-                            if text and text.lower() not in prompt_echo_source:
+                            if not core.is_prompt_echo(text, initial_prompt):
                                 logging.debug(
                                     f"Transcription [{info.language}]: {text}"
                                 )
@@ -315,6 +323,7 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
                                             info, "language_probability", None
                                         ),
                                         duration=duration,
+                                        no_speech_prob=no_speech_prob,
                                     )
                             else:
                                 logging.debug(f"Filtered prompt echo: {text}")

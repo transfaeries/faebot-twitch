@@ -152,7 +152,7 @@ class Faebot(commands.Bot, FaebotCommands):
 
         generation_id = str(uuid.uuid4())
         try:
-            response = await core.generate_response(
+            completion = await core.generate_response(
                 channel_name=channel_name,
                 stream_title=stream_title,
                 game_name=game_name,
@@ -162,15 +162,46 @@ class Faebot(commands.Bot, FaebotCommands):
                 generation_id=generation_id,
             )
         except Exception as e:
-            # core has already emitted an `error` event for this generation
+            # core has already emitted an `error` event for this generation.
+            # Nothing goes to chat: a failure of the machinery is not
+            # something faebot said (the old "Oops, something strange has
+            # happened" fallback landed fifteen minutes late on 08-20 and
+            # apologised in faer voice for our timeout). The capture keeps
+            # it — faebot was asked, and the machinery failed — so it is
+            # part of what happened in the room.
             logging.error(f"Generation failed: {e}")
-            try:
-                await channel.send(
-                    "Oops, something strange has happened. Please let the developer know!"
-                )
-            except Exception as fallback_e:
-                logging.error(f"Failed to send fallback message too: {fallback_e}")
+            capture.record_faebot_error(
+                channel_name,
+                f"{type(e).__name__}: {e}",
+                generation_id=generation_id,
+                trigger_type=trigger_type,
+                elapsed=getattr(e, "elapsed", None),
+            )
             return
+
+        if completion.passed:
+            # faebot chose silence: nothing to chat, but the choice is kept —
+            # the capture (for memory faebot) and the dashboard both see it.
+            capture.record_faebot_pass(
+                channel_name,
+                completion.reason_for_passing,
+                generation_id=generation_id,
+                trigger_type=trigger_type,
+                **completion.capture_meta(),
+            )
+            core.put_event(
+                self.event_queue,
+                {
+                    "type": "pass",
+                    "id": generation_id,
+                    "channel": channel_name,
+                    "reason": completion.reason_for_passing,
+                    **completion.capture_meta(),
+                },
+            )
+            return
+
+        response = completion.text
 
         try:
             await channel.send(response)
@@ -199,11 +230,13 @@ class Faebot(commands.Bot, FaebotCommands):
         # event_notice and correlate to the most recent send per channel.
         # See ROADMAP "Twitch NOTICE handling".
         # Capture tap — faebot's own utterance perceived back into the stream.
+        # Reasoning + latency ride along, so the capture doubles as data.
         capture.record_faebot_message(
             channel_name,
             response,
             generation_id=generation_id,
             trigger_type=trigger_type,
+            **completion.capture_meta(),
         )
 
         core.put_event(
@@ -213,6 +246,7 @@ class Faebot(commands.Bot, FaebotCommands):
                 "id": generation_id,
                 "channel": channel_name,
                 "text": response,
+                **completion.capture_meta(),
             },
         )
 

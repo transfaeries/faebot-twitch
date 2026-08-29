@@ -25,10 +25,12 @@ class TestEnsureConversation:
         assert second.frequency == 0.99
 
     def test_defaults(self):
+        """Defaults come from the env-readable module constants."""
         conv = core.ensure_conversation("defaults")
-        assert conv.frequency == 0.05
-        assert conv.voice_frequency == 0.025
-        assert conv.history == 20
+        assert conv.frequency == core.FREQUENCY
+        assert conv.voice_frequency == core.VOICE_FREQUENCY
+        assert conv.history == core.HISTORY
+        assert conv.model == core.MODEL
         assert conv.silenced is False
         assert conv.chatlog == []
 
@@ -150,7 +152,79 @@ class TestBuildSystemPrompt:
         prompt = core.build_system_prompt(
             conversation, "testchannel", "Title", "Game", []
         )
-        assert "42" in prompt
+        assert "between the last 34 and 42 messages" in prompt
+
+    @pytest.mark.parametrize("limit,floor", [(50, 40), (10, 8), (4, 4)])
+    def test_history_floor_drops_a_fifth(self, limit, floor):
+        assert core.history_floor(limit) == floor
+
+
+# ── the whisper prompt echo ──────────────────────────────────────────
+
+
+class TestIsPromptEcho:
+    PROMPT = "faebot, transfaeries"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "faebot, transfaeries",
+            "faebot, transfaeries  faebot, transfaeries",
+            "Faebot.",
+            "faebot!",
+            "and faebot, transfaeries",
+            "the faebot transfaeries",
+            "",
+            "...",
+        ],
+    )
+    def test_echoes(self, text):
+        assert core.is_prompt_echo(text, self.PROMPT)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "hello faebot, can you hear me?",
+            "faebot dearest",
+            "thank you faebot",
+            "I love speedruns, faebot",
+            "and guess who else is back, faebot is back",
+            "we heal at least",
+            "ようこそ",  # another script is not an echo (a different question)
+        ],
+    )
+    def test_real_speech(self, text):
+        assert not core.is_prompt_echo(text, self.PROMPT)
+
+
+# ── the silence sentinel ─────────────────────────────────────────────
+
+
+class TestSaidNothing:
+    def test_bare_sentinel(self):
+        assert core.said_nothing("NOTHING-TO-SAY")
+        assert core.pass_reason("NOTHING-TO-SAY") == ""
+
+    def test_case_and_spacing_are_forgiven(self):
+        assert core.said_nothing("nothing to say")
+        assert core.said_nothing("  Nothing-To-Say.")
+
+    def test_reason_after_sentinel_is_kept(self):
+        text = "NOTHING-TO-SAY — they're mid-conversation, I'll listen"
+        assert core.said_nothing(text)
+        assert core.pass_reason(text) == "they're mid-conversation, I'll listen"
+
+    def test_sentinel_mid_sentence_is_speech(self):
+        assert not core.said_nothing("honestly I have nothing to say about that")
+
+    def test_empty_is_a_drop_not_silence(self):
+        assert not core.said_nothing("")
+        assert not core.said_nothing("   ")
+
+    def test_prompt_tells_faebot_the_verb(self):
+        conv = core.Conversation(channel="c")
+        prompt = core.build_system_prompt(conv, "c", "t", "g", [])
+        assert core.SENTINEL_SILENCE in prompt
 
 
 # ── generate (OpenRouter API) ────────────────────────────────────────
@@ -161,25 +235,28 @@ class TestGenerate:
     async def test_successful_generation(self, openrouter_success):
         openrouter_success("test response")
         result = await core.generate(prompt="hello", system_prompt="you are faebot")
-        assert result == "test response"
+        assert result.text == "test response"
+        assert result.reasoning == ""
+        assert result.attempts == 1
         await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_non_retryable_error_returns_fallback(self):
+    async def test_4xx_raises_generation_failed(self):
+        """No fallback text is returned (it used to be POSTED to chat)."""
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 status=403,
                 payload={"error": "forbidden"},
             )
-            result = await core.generate(prompt="hello")
-            assert "couldn't generate" in result.lower()
+            with pytest.raises(core.GenerationFailed, match="403"):
+                await core.generate(prompt="hello")
             await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_retries_on_500_then_succeeds(self):
+    async def test_5xx_raises_without_retrying(self):
+        """One request, one chance: a 500 is a failure, not a retry loop."""
         with aioresponses_ctx() as mocked:
-            # First call: 500, second call: success
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 status=500,
@@ -187,14 +264,23 @@ class TestGenerate:
             )
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                payload={"choices": [{"message": {"content": "recovered!"}}]},
+                payload={"choices": [{"message": {"content": "never reached"}}]},
             )
-            result = await core.generate(prompt="hello")
-            assert result == "recovered!"
+            with pytest.raises(core.GenerationFailed, match="500"):
+                await core.generate(prompt="hello")
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 1
             await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_retries_on_429_rate_limit(self):
+    async def test_429_gets_exactly_one_retry_aimed_past_the_pool_that_said_no(
+        self, monkeypatch
+    ):
+        """A shared-pool rate limit clears in a second — but the pool that
+        said no is the one a same-list retry asks again (five asks lost that
+        way on 08-27). One retry, aimed at the rest of the pinned list."""
+        monkeypatch.setattr(core, "RATE_LIMIT_RETRY_DELAY", 0)
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai", "modal"))
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
@@ -203,29 +289,285 @@ class TestGenerate:
             )
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
-                payload={"choices": [{"message": {"content": "after rate limit"}}]},
+                payload={"choices": [{"message": {"content": "recovered"}}]},
             )
             result = await core.generate(prompt="hello")
-            assert result == "after rate limit"
+            assert result.text == "recovered"
+            sent = [
+                c.kwargs["json"] for calls in mocked.requests.values() for c in calls
+            ]
+            assert len(sent) == 2
+            assert sent[0]["provider"]["order"] == ["moonshotai", "modal"]
+            assert sent[1]["provider"] == {"order": ["modal"], "allow_fallbacks": False}
             await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_all_retries_exhausted_raises(self, openrouter_error):
+    async def test_429_with_one_pinned_provider_still_retries_it(self, monkeypatch):
+        """Nowhere else to aim: the one retry asks the same provider again,
+        as it always did."""
+        monkeypatch.setattr(core, "RATE_LIMIT_RETRY_DELAY", 0)
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai",))
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=429,
+                payload={"error": "rate limited"},
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "recovered"}}]},
+            )
+            result = await core.generate(prompt="hello")
+            assert result.text == "recovered"
+            sent = [
+                c.kwargs["json"] for calls in mocked.requests.values() for c in calls
+            ]
+            assert [s["provider"]["order"] for s in sent] == [["moonshotai"]] * 2
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_429_twice_fails_after_the_one_retry(self, monkeypatch):
+        monkeypatch.setattr(core, "RATE_LIMIT_RETRY_DELAY", 0)
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=429,
+                payload={"error": "rate limited"},
+                repeat=True,
+            )
+            with pytest.raises(core.GenerationFailed, match="429") as info:
+                await core.generate(prompt="hello")
+            assert info.value.is_rate_limit
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 2
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_504_retries_once_on_the_rest_of_the_pinned_list(self, monkeypatch):
+        """An upstream drop is retried ONCE, aimed at the pinned providers
+        after the one that dropped — never outside the pin."""
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai", "modal"))
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=504,
+                payload={"error": {"message": "The operation was aborted"}},
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "caught by modal"}}]},
+            )
+            result = await core.generate(prompt="hello")
+            assert result.text == "caught by modal"
+            sent = [
+                c.kwargs["json"] for calls in mocked.requests.values() for c in calls
+            ]
+            assert len(sent) == 2
+            assert sent[0]["provider"]["order"] == ["moonshotai", "modal"]
+            assert sent[1]["provider"] == {"order": ["modal"], "allow_fallbacks": False}
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_504_inside_a_200_body_counts_as_a_drop(self, monkeypatch):
+        """OpenRouter answers 200 with `{"error": {"code": 504}}` when the
+        upstream aborts mid-call; that is the drop we actually see."""
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai", "modal"))
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "error": {"message": "The operation was aborted", "code": 504}
+                },
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "caught by modal"}}]},
+            )
+            result = await core.generate(prompt="hello")
+            assert result.text == "caught by modal"
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_504_with_nowhere_else_to_go_is_final(self, monkeypatch):
+        """One pinned provider: a drop has no second address, so it fails."""
+        monkeypatch.setattr(core, "PROVIDERS", ("moonshotai",))
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                status=504,
+                payload={"error": {"message": "The operation was aborted"}},
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "never reached"}}]},
+            )
+            with pytest.raises(core.GenerationFailed, match="504") as info:
+                await core.generate(prompt="hello")
+            assert info.value.is_upstream_drop and not info.value.is_rate_limit
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 1
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_network_error_raises_generation_failed(self, openrouter_error):
         openrouter_error(status=500, repeat=True)
-        with pytest.raises(Exception, match="failed after 3 attempts"):
+        with pytest.raises(core.GenerationFailed):
             await core.generate(prompt="hello")
         await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_malformed_response_returns_fallback(self):
+    async def test_timeout_raises_generation_failed_with_elapsed(self):
+        import asyncio as _asyncio
+
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                exception=_asyncio.TimeoutError(),
+            )
+            with pytest.raises(core.GenerationFailed, match="timed out") as info:
+                await core.generate(prompt="hello")
+            assert info.value.elapsed >= 0
+            assert not info.value.is_rate_limit
+            calls = sum(len(c) for c in mocked.requests.values())
+            assert calls == 1
+            await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_malformed_response_raises(self):
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 payload={"unexpected": "format"},
             )
-            result = await core.generate(prompt="hello")
-            assert "couldn't generate" in result.lower()
+            with pytest.raises(core.GenerationFailed, match="no choices"):
+                await core.generate(prompt="hello")
             await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_request_carries_pinned_sampling_and_timeout(self):
+        """Sampling is pinned (no lottery, no top_k, no seed) and every
+        request has a real timeout."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "ok"}}]},
+            )
+            await core.generate(
+                prompt="hello", params={"temperature": 1.0, "top_p": 0.95}
+            )
+            (request,) = [call for calls in mocked.requests.values() for call in calls]
+        body = request.kwargs["json"]
+        assert body["temperature"] == 1.0
+        assert body["top_p"] == 0.95
+        assert "top_k" not in body and "seed" not in body
+        timeout = request.kwargs["timeout"]
+        assert timeout.total == core.REQUEST_TIMEOUT
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_provider_and_params_ride_on_the_completion(self):
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "provider": "Moonshot AI",
+                    "choices": [{"message": {"content": "ok"}}],
+                },
+            )
+            result = await core.generate(
+                prompt="hello", params={"temperature": 0.7, "top_p": 0.9}
+            )
+        assert result.provider == "Moonshot AI"
+        assert result.params == {"temperature": 0.7, "top_p": 0.9}
+        assert result.capture_meta()["provider"] == "Moonshot AI"
+        assert result.capture_meta()["params"] == {"temperature": 0.7, "top_p": 0.9}
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_reasoning_and_content_kept_apart(self):
+        """`content` is the answer channel, `reasoning` a separate one — both
+        survive, neither leaks into the other."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "model": "moonshotai/kimi-k3",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "hi chat!",
+                                "reasoning": "they said hello, I should say hi",
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"completion_tokens": 40},
+                },
+            )
+            result = await core.generate(prompt="hello")
+        assert result.text == "hi chat!"
+        assert result.reasoning == "they said hello, I should say hi"
+        assert result.finish_reason == "stop"
+        assert result.model == "moonshotai/kimi-k3"
+        assert result.usage == {"completion_tokens": 40}
+        assert result.elapsed >= 0
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_request_sends_reasoning_room_on_top_of_answer_cap(self):
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "ok"}}]},
+            )
+            await core.generate(prompt="hello", model="some/model")
+            (request,) = [call for calls in mocked.requests.values() for call in calls]
+        body = request.kwargs["json"]
+        assert body["model"] == "some/model"
+        assert body["reasoning"] == {"max_tokens": core.REASONING_CAP}
+        assert body["max_tokens"] == core.GENERATION_CAP + core.REASONING_CAP
+        assert body["provider"] == {
+            "order": list(core.PROVIDERS),
+            "allow_fallbacks": False,
+        }
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_empty_answer_channel_rolls_again(self):
+        """Empty `content` beside a full `reasoning` is a dropped payload, not
+        silence — roll once more."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "choices": [
+                        {"message": {"content": "", "reasoning": "thinking..."}}
+                    ]
+                },
+            )
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "second try"}}]},
+            )
+            result = await core.generate(prompt="hello")
+        assert result.text == "second try"
+        assert result.attempts == 2
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_empty_twice_returns_empty_honestly(self):
+        """After the rolls run out the Completion stays empty — the caller
+        decides what a dropped payload means; generate() tells the truth."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": ""}}]},
+                repeat=True,
+            )
+            result = await core.generate(prompt="hello")
+        assert result.is_empty
+        assert result.attempts == core.EMPTY_ROLLS
+        await core.close_session()
 
 
 # ── generate_response (full pipeline) ────────────────────────────────
@@ -243,22 +585,25 @@ class TestGenerateResponse:
             result = await core.generate_response(
                 "testchannel", stream_title="Test", game_name="Art"
             )
-        assert result == "hi there!"
+        assert result.text == "hi there!"
         assert "faebot: hi there!" in conversation.chatlog
         await core.close_session()
 
     @pytest.mark.asyncio
-    async def test_trims_chatlog_to_history_length(self, conversation):
-        conversation.history = 5
-        conversation.chatlog = [f"msg{i}" for i in range(10)]
+    async def test_trims_chatlog_in_a_block(self, conversation):
+        """Over the limit → cut back to the floor (10 - 10//5 = 8), so the
+        prompt prefix stays put for the next couple of calls."""
+        conversation.history = 10
+        conversation.chatlog = [f"msg{i}" for i in range(20)]
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 payload={"choices": [{"message": {"content": "reply"}}]},
             )
             await core.generate_response("testchannel")
-        # 5 kept from trim + 1 appended response
-        assert len(conversation.chatlog) == 6
+        # 8 kept from trim + 1 appended response
+        assert len(conversation.chatlog) == 9
+        assert conversation.chatlog[0] == "msg12"
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -270,8 +615,50 @@ class TestGenerateResponse:
                 payload={"choices": [{"message": {"content": long_text}}]},
             )
             result = await core.generate_response("testchannel")
-        assert len(result) == 500
-        assert result.endswith("\u2013")
+        assert len(result.text) == 500
+        assert result.text.endswith("\u2013")
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_pass_is_not_posted_but_is_remembered(self, conversation):
+        """The sentinel marks chosen silence: text stays as-is for the caller
+        to recognise, the chatlog records the fact (not the reason)."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "NOTHING-TO-SAY — just listening",
+                                "reasoning": "nobody's talking to me",
+                            }
+                        }
+                    ]
+                },
+            )
+            result = await core.generate_response("testchannel")
+        assert result.passed
+        assert result.reason_for_passing == "just listening"
+        assert result.reasoning == "nobody's talking to me"
+        assert conversation.chatlog[-1] == "faebot: *stays quiet*"
+        assert not any("listening" in line for line in conversation.chatlog)
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_multiline_reply_is_folded_to_one_line(self, conversation):
+        """IRC carries one line per message; kimi writes several."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={
+                    "choices": [
+                        {"message": {"content": "hi chat!!\n\n*flutters*  \nbye~"}}
+                    ]
+                },
+            )
+            result = await core.generate_response("testchannel")
+        assert result.text == "hi chat!! *flutters* bye~"
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -283,7 +670,7 @@ class TestGenerateResponse:
                 payload={"choices": [{"message": {"content": "hitransf23Botlovebye"}}]},
             )
             result = await core.generate_response("testchannel", emotes=emotes)
-        assert result == "hi transf23Botlove bye"
+        assert result.text == "hi transf23Botlove bye"
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -319,7 +706,7 @@ class TestEventQueue:
                 payload={"choices": [{"message": {"content": "hi"}}]},
             )
             result = await core.generate_response("testchannel")
-        assert result == "hi"
+        assert result.text == "hi"
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -340,6 +727,10 @@ class TestEventQueue:
         assert events[0]["model"] == conversation.model
         assert "prompt" in events[0]
         assert "system_prompt" in events[0]
+        assert events[0]["params"] == {
+            "temperature": core.TEMPERATURE,
+            "top_p": core.TOP_P,
+        }
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -352,7 +743,7 @@ class TestEventQueue:
                 payload={"error": "server error"},
                 repeat=True,
             )
-            with pytest.raises(Exception, match="failed after 3 attempts"):
+            with pytest.raises(core.GenerationFailed):
                 await core.generate_response("testchannel", events=queue)
         events = _drain_queue(queue)
         types = [e["type"] for e in events]

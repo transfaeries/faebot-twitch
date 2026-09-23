@@ -1,20 +1,25 @@
+"""
+The body's server: the events dashboard and the door the ear speaks through.
+
+Two endpoints that matter. `/ws/events` broadcasts generation events to
+connected dashboards (a ring buffer replays on connect). `/hear` receives one
+transcription from the ear (ear.py) and hands it to the bot — what used to be
+an in-process method call is now a small HTTP wire, so the ear can live on
+the machine with the GPU and the body on the machine with the diary.
+
+No ML models load here; the body is light.
+"""
+
 from pathlib import Path
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from silero_vad import load_silero_vad, VADIterator
-from faster_whisper import WhisperModel
 from os import getenv
 import asyncio
-import json
 import logging
 import uvicorn
-import numpy as np
-import torch
-import core
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(message)s",
@@ -22,15 +27,18 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-
-WHISPER_TIMEOUT = int(getenv("WHISPER_TIMEOUT", "30"))
+# The ear's shared secret. Unset = any caller on the network the body listens
+# on may speak into it; fine on one machine or a tailnet, said loudly at start.
+EAR_TOKEN = getenv("EAR_TOKEN", "")
+STREAMER_CHANNEL = getenv("STREAMER_CHANNEL", "transfaeries")
+BODY_PORT = int(getenv("BODY_PORT", "8000"))
 
 
 def create_app(bot=None, events: asyncio.Queue | None = None):
-    """Create the FastAPI app, optionally with a reference to the Twitch bot.
+    """Create the body's FastAPI app, optionally with a reference to the Twitch bot.
 
-    `events` is the shared generation event queue; the upcoming /ws/events
-    endpoint will drain it and broadcast to connected dashboards.
+    `events` is the shared generation event queue; `/ws/events` drains it and
+    broadcasts to connected dashboards.
     """
     app = FastAPI()
     app.state.bot = bot
@@ -73,88 +81,8 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
             if task:
                 task.cancel()
 
-    # Load models
-    vad_model = load_silero_vad()
-    logging.info("VAD model loaded")
-
-    whisper_model_name = getenv("WHISPER_MODEL_NAME", "medium")
-    whisper_device = getenv("WHISPER_DEVICE", "cuda")
-    whisper_compute = getenv("WHISPER_COMPUTE", "float16")
-
-    def _load_whisper():
-        """Load (or reload) the Whisper model."""
-        model = WhisperModel(
-            whisper_model_name, device=whisper_device, compute_type=whisper_compute
-        )
-        logging.getLogger("faster_whisper").setLevel(logging.WARNING)
-        logging.info("Whisper model loaded")
-        return model
-
-    whisper_model = _load_whisper()
-
-    # Single-thread executor for Whisper — keeps transcription off the event loop
-    # while ensuring only one CUDA call runs at a time
-    whisper_state = {
-        "executor_is_fresh": True,
-        "rebuilding": False,
-        "executor": ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper"),
-        "model": whisper_model,
-    }
-    app.state.whisper = whisper_state
-
-    def _transcribe_sync(audio: np.ndarray, initial_prompt: str):
-        """Run Whisper transcription synchronously (called from executor thread)."""
-        model = whisper_state.get("model")
-        if model is None:
-            raise RuntimeError("Whisper model not loaded")
-        segments, info = model.transcribe(audio, initial_prompt=initial_prompt)
-        segments = list(segments)
-        text = " ".join(segment.text for segment in segments).strip()
-        # Whisper's own estimate that a segment is not speech — captured so
-        # the prompt-echo problem can be studied against real numbers.
-        no_speech_prob = (
-            max(
-                (getattr(segment, "no_speech_prob", 0.0) or 0.0) for segment in segments
-            )
-            if segments
-            else None
-        )
-        return text, info, no_speech_prob
-
-    def _rebuild_executor():
-        """Abandon a stuck executor thread and create a fresh one (keeps the model)."""
-        logging.warning("Whisper executor stuck — replacing with fresh thread")
-        whisper_state["executor"].shutdown(wait=False)
-        whisper_state["executor"] = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="whisper"
-        )
-
-    async def _rebuild_whisper():
-        """Full recovery: new executor + reload the Whisper model (fixes corrupted CUDA state).
-
-        Guarded against re-entry — if a rebuild is already in progress,
-        subsequent calls are no-ops. Transcription is skipped while rebuilding.
-        """
-        if whisper_state["rebuilding"]:
-            logging.warning("Whisper rebuild already in progress — skipping")
-            return
-        whisper_state["rebuilding"] = True
-        try:
-            logging.warning("Whisper timed out on fresh executor — reloading model")
-            whisper_state["executor"].shutdown(wait=False)
-            whisper_state["model"] = None
-            new_executor = ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="whisper"
-            )
-            whisper_state["executor"] = new_executor
-            loop = asyncio.get_event_loop()
-            whisper_state["model"] = await loop.run_in_executor(
-                new_executor, _load_whisper
-            )
-        except Exception as e:
-            logging.error(f"Whisper rebuild failed: {e}")
-        finally:
-            whisper_state["rebuilding"] = False
+    if not EAR_TOKEN:
+        logging.warning("EAR_TOKEN is not set — /hear accepts any caller")
 
     # Set up templates and static files
     BASE_DIR = Path(__file__).parent
@@ -165,6 +93,43 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
     async def home(request: Request) -> HTMLResponse:
         """Render the dashboard page."""
         return templates.TemplateResponse("dashboard.html", {"request": request})
+
+    @app.post("/hear")
+    async def hear(request: Request) -> JSONResponse:
+        """One utterance from the ear.
+
+        The payload is what ear.py's `utterance()` builds — text plus
+        Whisper's metadata plus `heard_at`. Everything the ear sends is handed
+        to the bot; the bot decides whether faebot heard it (bot.py's
+        filters) and answers with `heard` and, when not, `why` — the ear's
+        page shows that answer beside the line.
+        """
+        if EAR_TOKEN and request.headers.get("X-Ear-Token") != EAR_TOKEN:
+            return JSONResponse({"error": "wrong ear token"}, status_code=403)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "not json"}, status_code=400)
+        if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
+            return JSONResponse({"error": "no text"}, status_code=400)
+        if app.state.bot is None:
+            return JSONResponse({"error": "no body listening"}, status_code=503)
+        text = payload["text"]
+        whisper_meta = {
+            key: payload.get(key)
+            for key in (
+                "language",
+                "language_probability",
+                "duration",
+                "no_speech_prob",
+                "heard_at",
+                "whisper_prompt",
+            )
+        }
+        why = await app.state.bot.handle_transcription(
+            STREAMER_CHANNEL, text, **whisper_meta
+        )
+        return JSONResponse({"heard": why is None, "why": why})
 
     @app.websocket("/ws/events")
     async def events_websocket(websocket: WebSocket) -> None:
@@ -191,153 +156,9 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
         finally:
             event_clients.discard(websocket)
 
-    @app.websocket("/ws/audio")
-    async def audio_websocket(websocket: WebSocket) -> None:
-        """WebSocket endpoint for receiving audio data and performing VAD."""
-        initial_prompt = "faebot, transfaeries"
-        try:
-            logging.debug("WebSocket handler entered")
-            await websocket.accept()
-            logging.info("Audio WebSocket connected")
-
-            sample_rate = 16000
-            vad_chunk_size = 512  # VADIterator requires 512, 1024, or 1536 samples
-
-            # Create VAD iterator for this connection
-            vad_iterator = VADIterator(
-                model=vad_model,
-                sampling_rate=sample_rate,
-                threshold=0.5,
-                min_silence_duration_ms=500,
-                speech_pad_ms=100,
-            )
-
-            audio_buffer = bytearray()
-
-            # Speech accumulation
-            is_speaking = False
-            speech_buffer: list = []  # Will hold audio tensors during speech
-
-            while True:
-                data = await websocket.receive_bytes()
-
-                # Keep-alive ping (empty message)
-                if len(data) == 0:
-                    logging.debug("Keep-alive ping received")
-                    continue
-
-                audio_buffer.extend(data)
-
-                bytes_per_chunk = vad_chunk_size * 2  # 2 bytes per int16 sample
-
-                # Process in 512-sample chunks as required by VADIterator
-                while len(audio_buffer) >= bytes_per_chunk:
-                    chunk_bytes = bytes(audio_buffer[:bytes_per_chunk])
-                    audio_buffer = audio_buffer[bytes_per_chunk:]
-
-                    # Convert to tensor for VAD
-                    audio_array = np.frombuffer(chunk_bytes, dtype=np.int16)
-                    audio_float = audio_array.astype(np.float32) / 32768.0
-                    audio_tensor = torch.from_numpy(audio_float)
-
-                    # Feed to VAD iterator
-                    event = vad_iterator(audio_tensor, return_seconds=True)
-
-                    if event and "start" in event:
-                        logging.debug(f"Speech started at {event['start']:.2f}s")
-                        is_speaking = True
-                        speech_buffer = []
-
-                    if is_speaking:
-                        speech_buffer.append(audio_tensor)
-
-                    if event and "end" in event:
-                        logging.debug(f"Speech ended at {event['end']:.2f}s")
-                        is_speaking = False
-
-                        if speech_buffer:
-                            # Skip transcription while Whisper is rebuilding
-                            if whisper_state["rebuilding"]:
-                                logging.debug(
-                                    "Whisper rebuilding — dropping audio chunk"
-                                )
-                                speech_buffer = []
-                                continue
-
-                            # Concatenate all chunks and transcribe
-                            full_audio = torch.cat(speech_buffer).numpy()
-                            duration = len(full_audio) / sample_rate
-                            logging.debug(f"Transcribing {duration:.1f}s of audio")
-
-                            try:
-                                loop = asyncio.get_event_loop()
-                                text, info, no_speech_prob = await asyncio.wait_for(
-                                    loop.run_in_executor(
-                                        whisper_state["executor"],
-                                        _transcribe_sync,
-                                        full_audio,
-                                        initial_prompt,
-                                    ),
-                                    timeout=WHISPER_TIMEOUT,
-                                )
-                                whisper_state["executor_is_fresh"] = False
-                            except asyncio.TimeoutError:
-                                logging.error(
-                                    f"Whisper transcription timed out after {WHISPER_TIMEOUT}s "
-                                    f"on {duration:.1f}s of audio — skipping chunk"
-                                )
-                                if whisper_state["executor_is_fresh"]:
-                                    # Fresh executor timed out — CUDA/model is broken
-                                    await _rebuild_whisper()
-                                else:
-                                    # Executor was stuck from a previous timeout — just replace the thread
-                                    _rebuild_executor()
-                                whisper_state["executor_is_fresh"] = True
-                                speech_buffer = []
-                                continue
-
-                            if not core.is_prompt_echo(text, initial_prompt):
-                                logging.debug(
-                                    f"Transcription [{info.language}]: {text}"
-                                )
-                                await websocket.send_text(
-                                    json.dumps(
-                                        {"text": text, "language": info.language}
-                                    )
-                                )
-
-                                # Feed transcription to bot if connected. Whisper
-                                # metadata is passed through for capture only
-                                # (modality=voice Observation); it doesn't affect
-                                # generation. getattr-guarded so it can never break
-                                # the audio path.
-                                if app.state.bot:
-                                    streamer = getenv(
-                                        "STREAMER_CHANNEL", "transfaeries"
-                                    )
-                                    await app.state.bot.handle_transcription(
-                                        streamer,
-                                        text,
-                                        language=getattr(info, "language", None),
-                                        language_probability=getattr(
-                                            info, "language_probability", None
-                                        ),
-                                        duration=duration,
-                                        no_speech_prob=no_speech_prob,
-                                    )
-                            else:
-                                logging.debug(f"Filtered prompt echo: {text}")
-
-                            speech_buffer = []
-
-        except Exception as e:
-            logging.warning(f"WebSocket disconnected: {e}")
-        finally:
-            vad_iterator.reset_states()
-
     return app
 
 
 if __name__ == "__main__":
     app = create_app()
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=BODY_PORT)

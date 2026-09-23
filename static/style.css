@@ -363,3 +363,6 @@ header h1 {
     color: var(--color-secondary-dim);
     font-size: 0.75rem;
 }
+/* The ear's log: what the body made of a line. */
+.log-entry.unheard .text { opacity: 0.55; text-decoration: line-through; }
+.log-entry.spooled .time { color: #e8b94a; }

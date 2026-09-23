@@ -312,6 +312,43 @@ def is_prompt_echo(text: str, prompt: str) -> bool:
     return all(word in prompt_words or word in _ECHO_FILLER for word in words)
 
 
+# The prompt the ear primes Whisper with, when the ear doesn't say (it does —
+# every utterance carries `whisper_prompt` — this is the fallback).
+WHISPER_PROMPT = os.getenv("WHISPER_PROMPT", "faebot, transfaeries")
+
+# Whisper's second hallucination class: on breath or near-silence its decoder
+# emits the highest-frequency strings of its caption training data — "thanks
+# for watching, please subscribe", "see you in the next video" — as a burst
+# of 18–30 words over a clip of a second or two. Nobody talks that fast: real
+# speech on stream runs 2–4 words a second, six at the very most, while these
+# run eight to thirty. A rate ceiling separates them cleanly; a phrase list
+# would not, because the streamer really does talk about subscribing. Short
+# bursts are left alone — three words in a second is a real "thanks, bye".
+OUTRO_BLEED_WORDS_PER_SECOND = float(os.getenv("OUTRO_BLEED_WORDS_PER_SECOND", "7"))
+OUTRO_BLEED_MIN_WORDS = int(os.getenv("OUTRO_BLEED_MIN_WORDS", "8"))
+
+
+def is_outro_bleed(text: str, duration: float | None) -> bool:
+    """Was this transcribed faster than anyone talks? Needs the clip's
+    duration; without it, nothing can be said and nothing is filtered."""
+    if not duration or duration <= 0:
+        return False
+    words = len(re.findall(r"\w+", text))
+    if words < OUTRO_BLEED_MIN_WORDS:
+        return False
+    return words / duration > OUTRO_BLEED_WORDS_PER_SECOND
+
+
+# faebot's own line sometimes comes back wearing its speaker tag — the prompt
+# ends in "faebot:" and the model repeats it. Chat would show "faebot: hi" as
+# if fae were quoting faerself; strip one leading tag, and only at the start.
+_SPEAKER_TAG = re.compile(r"^\s*faebot\s*:\s*", re.IGNORECASE)
+
+
+def strip_speaker_tag(text: str) -> str:
+    return _SPEAKER_TAG.sub("", text, count=1)
+
+
 def fix_emote_spacing(text: str, emotes: list[str]) -> str:
     """Ensure emotes are surrounded by whitespace so Twitch renders them."""
     if not emotes:
@@ -472,6 +509,7 @@ async def generate_response(
     # IRC messages are one line. kimi writes multi-line replies (gemini never
     # did); fold them rather than let TwitchIO truncate at the first newline.
     response = " ".join(line.strip() for line in response.splitlines() if line.strip())
+    response = strip_speaker_tag(response)
     if len(response) > 499:
         logging.debug("generated content exceeded 500 characters, trimming.")
         response = response[:499] + "\u2013"

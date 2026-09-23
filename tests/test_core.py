@@ -200,6 +200,36 @@ class TestIsPromptEcho:
 # ── the silence sentinel ─────────────────────────────────────────────
 
 
+class TestIsOutroBleed:
+    BURST = " ".join(["thanks for watching please subscribe"] * 5)  # 25 words
+
+    def test_a_burst_over_a_short_clip_is_bleed(self):
+        assert core.is_outro_bleed(self.BURST, 1.5)  # ~17 w/s
+
+    def test_the_same_words_at_talking_speed_are_speech(self):
+        assert not core.is_outro_bleed(self.BURST, 9.0)  # ~2.8 w/s
+
+    def test_short_bursts_are_left_alone(self):
+        assert not core.is_outro_bleed("thanks for watching", 0.6)  # 5 w/s, 3 words
+
+    def test_no_duration_says_nothing(self):
+        assert not core.is_outro_bleed(self.BURST, None)
+        assert not core.is_outro_bleed(self.BURST, 0)
+
+
+class TestStripSpeakerTag:
+    def test_leading_tag_is_stripped_once(self):
+        assert core.strip_speaker_tag("faebot: hi chat") == "hi chat"
+        assert core.strip_speaker_tag("Faebot : hi") == "hi"
+        assert core.strip_speaker_tag("faebot: faebot: hi") == "faebot: hi"
+
+    def test_a_tag_mid_sentence_is_speech(self):
+        assert core.strip_speaker_tag("i said faebot: hi") == "i said faebot: hi"
+
+    def test_untagged_text_is_untouched(self):
+        assert core.strip_speaker_tag("hi chat") == "hi chat"
+
+
 class TestSaidNothing:
     def test_bare_sentinel(self):
         assert core.said_nothing("NOTHING-TO-SAY")

@@ -30,5 +30,6 @@ permalog.txt
 # Capture tap output — real viewers' chat/voice, must never be committed
 twitch-*.jsonl
 
-# The ear's spool of undelivered utterances (real speech; never committed)
-ear-spool.jsonl
+# The ear's spool of undelivered utterances, its rewrite scratch, and the
+# lines set aside (real speech; never committed)
+ear-spool*

@@ -17,11 +17,11 @@ Design rules (load-bearing — this runs inside the LIVE bot on stream):
   * **Never breaks the bot.** Every extraction + write is wrapped; failures are
     swallowed and logged at debug. Capturing a conversation must never break it.
   * **Faithful & maximalist.** We record raw fields verbatim, drop nothing, and
-    interpret nothing — with one named exception: voice is captured downstream
-    of the live-loop's transcription filters (filter_transcription and the
-    prompt-echo check), because a mistranscription faebot never "heard" should
-    not become a memory either. Whether a live-loop filter should double as a
-    memory filter is an open question, filed to the recognition sitting.
+    interpret nothing. Voice included: a line the body's filters threw away
+    (a banned mistranscription, a prompt echo, an outro bleed) is still
+    captured, marked `heard: false` with its `why`, so the record keeps what
+    the ear discarded without pretending faebot heard it; what reaches faebot's
+    memory is decided downstream, by the reader of the capture, not here.
     Unanticipated input is captured as-is (see record_raw) so
     faebot can perceive things we never coded for — the bitter-lesson discipline.
   * **Append-only, date-stamped.** Reruns/restarts accumulate, never truncate.

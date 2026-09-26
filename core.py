@@ -154,12 +154,14 @@ class Completion:
 
     @property
     def passed(self) -> bool:
-        """faebot chose silence (said the sentinel). Nothing gets posted."""
-        return said_nothing(self.text)
+        """faebot chose silence (said the sentinel). Nothing gets posted.
+        The sentinel may arrive wearing the speaker tag ("faebot: NOTHING-TO-SAY")
+        — the tag is stripped before the test, or the bare word reaches chat."""
+        return said_nothing(strip_speaker_tag(self.text))
 
     @property
     def reason_for_passing(self) -> str:
-        return pass_reason(self.text) if self.passed else ""
+        return pass_reason(strip_speaker_tag(self.text)) if self.passed else ""
 
     def capture_meta(self) -> dict[str, Any]:
         """The provenance fields worth writing alongside faebot's utterance."""

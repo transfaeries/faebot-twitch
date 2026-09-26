@@ -151,3 +151,59 @@ class TestSpool:
     @pytest.mark.asyncio
     async def test_drain_with_no_spool_is_true(self, link, closed):
         assert await link.drain() is True
+
+    @pytest.mark.asyncio
+    async def test_a_torn_line_is_set_aside_and_the_rest_drains(self, link, closed):
+        """A crash mid-write leaves half a line; it must not wedge the spool."""
+        link._spool(line("one"))
+        with open(link.spool, "a", encoding="utf-8") as spool_file:
+            spool_file.write('{"text": "tw')  # no newline, no close
+        with open(link.spool, "a", encoding="utf-8") as spool_file:
+            spool_file.write("\n")
+        link._spool(line("three"))
+        with aioresponses() as mocked:
+            mocked.post(HEAR, payload={"heard": True, "why": None})
+            mocked.post(HEAR, payload={"heard": True, "why": None})
+            assert await link.drain() is True
+            sent = [
+                call.kwargs["json"]["text"]
+                for call in list(mocked.requests.values())[0]
+            ]
+        assert sent == ["one", "three"]
+        assert not link.spool.exists()
+        aside = [json.loads(row) for row in link.set_aside.read_text().splitlines()]
+        assert len(aside) == 1
+        assert aside[0]["line"] == '{"text": "tw'
+        assert "unreadable" in aside[0]["why"]
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_payload_is_set_aside_not_retried(self, link, closed):
+        """400: the body heard us and will never take this line — one
+        attempt, no spool, the line kept beside it for a human."""
+        with aioresponses() as mocked:
+            mocked.post(HEAR, status=400)
+            answer = await link.deliver(line("bad"))
+            attempts = len(list(mocked.requests.values())[0])
+        assert answer is None
+        assert attempts == 1
+        assert not link.spool.exists()
+        aside = [json.loads(row) for row in link.set_aside.read_text().splitlines()]
+        assert json.loads(aside[0]["line"])["text"] == "bad"
+
+    @pytest.mark.asyncio
+    async def test_a_refused_token_keeps_the_spool_and_waits(self, link, closed):
+        """403: ours to fix, not the line's fault — spool it, and the drain
+        stops at it without setting anything aside."""
+        with aioresponses() as mocked:
+            mocked.post(HEAR, status=403)
+            assert await link.deliver(line("one")) is None
+        assert [
+            json.loads(row)["text"] for row in link.spool.read_text().splitlines()
+        ] == ["one"]
+        with aioresponses() as mocked:
+            mocked.post(HEAR, status=403)
+            assert await link.drain() is False
+        assert [
+            json.loads(row)["text"] for row in link.spool.read_text().splitlines()
+        ] == ["one"]
+        assert not link.set_aside.exists()

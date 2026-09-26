@@ -28,6 +28,7 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import uvicorn
 import numpy as np
 
@@ -68,6 +69,18 @@ def utterance(
         "no_speech_prob": no_speech_prob,
         "heard_at": datetime.datetime.now(datetime.UTC).isoformat(),
     }
+
+
+class Rejected(RuntimeError):
+    """The body answered 4xx: it heard the ear and refused the line."""
+
+    def __init__(self, status: int):
+        super().__init__(f"body rejected the utterance ({status})")
+        self.status = status
+
+    @property
+    def is_auth(self) -> bool:
+        return self.status in (401, 403)
 
 
 class BodyLink:
@@ -111,7 +124,9 @@ class BodyLink:
         return headers
 
     async def _post(self, payload: dict) -> dict:
-        """One attempt. Raises on any failure to deliver."""
+        """One attempt. Raises on any failure to deliver: `Rejected` when the
+        body answered 4xx (it heard us and said no), a plain error otherwise
+        (it could not be reached, or fell over)."""
         session = await self.session()
         async with session.post(
             f"{self.body_url}/hear",
@@ -119,13 +134,15 @@ class BodyLink:
             headers=self._headers(),
             timeout=aiohttp.ClientTimeout(total=self.timeout),
         ) as response:
+            if 400 <= response.status < 500:
+                raise Rejected(response.status)
             if response.status != 200:
                 raise RuntimeError(f"body answered {response.status}")
             return await response.json()
 
     async def deliver(self, payload: dict) -> dict | None:
         """Deliver now if we can; spool if we can't. Returns the body's
-        answer (what it made of the line) or None when spooled."""
+        answer (what it made of the line) or None when spooled or set aside."""
         async with self._lock:
             # Anything already spooled goes first, so the body hears things
             # in the order they were said.
@@ -135,6 +152,21 @@ class BodyLink:
             for attempt in (1, 2):
                 try:
                     return await self._post(payload)
+                except Rejected as rejection:
+                    # The body heard us and refused. A bad token is ours to
+                    # fix — keep the line for after; a bad payload will never
+                    # be accepted — set it aside so the wire stays clear.
+                    if rejection.is_auth:
+                        logging.error(
+                            f"the body refused the ear's token ({rejection.status}) — "
+                            "check EAR_TOKEN on both sides; spooling until it is fixed"
+                        )
+                        self._spool(payload)
+                    else:
+                        self._set_aside(
+                            json.dumps(payload, ensure_ascii=False), str(rejection)
+                        )
+                    return None
                 except Exception as error:
                     logging.warning(
                         f"delivery to the body failed (attempt {attempt}): "
@@ -152,6 +184,24 @@ class BodyLink:
             logging.warning(f"spooled an utterance to {self.spool}")
         except Exception as error:
             logging.error(f"could not spool an utterance: {error}")
+
+    @property
+    def set_aside(self) -> Path:
+        """Lines the wire could not carry and never will: a torn spool line
+        (a crash mid-write), a payload the body rejected. Kept beside the
+        spool, never retried — a human reads them, the drain does not."""
+        return self.spool.with_name(self.spool.stem + ".rejected" + self.spool.suffix)
+
+    def _set_aside(self, raw_line: str, why: str) -> None:
+        logging.error(f"setting an utterance aside ({why}) → {self.set_aside}")
+        try:
+            with open(self.set_aside, "a", encoding="utf-8") as aside:
+                aside.write(
+                    json.dumps({"why": why, "line": raw_line}, ensure_ascii=False)
+                    + "\n"
+                )
+        except Exception as error:
+            logging.error(f"could not set the utterance aside: {error}")
 
     async def drain(self) -> bool:
         """Try to deliver everything spooled, oldest first. True if the spool
@@ -171,18 +221,43 @@ class BodyLink:
         except Exception as error:
             logging.error(f"could not read the spool: {error}")
             return False
+        remaining: list[str] = []
         delivered = 0
-        for line in lines:
+        stopped = False
+        for index, line in enumerate(lines):
             try:
-                await self._post(json.loads(line))
+                payload = json.loads(line)
+            except ValueError as error:
+                # A torn line (the ear died mid-write) must not wedge the
+                # spool: set it aside and keep draining behind it.
+                self._set_aside(line, f"unreadable spool line: {error}")
+                continue
+            try:
+                await self._post(payload)
+            except Rejected as rejection:
+                if rejection.is_auth:
+                    logging.error(
+                        f"the body refused the ear's token ({rejection.status}) — "
+                        "check EAR_TOKEN on both sides; the spool waits"
+                    )
+                    remaining = lines[index:]
+                    stopped = True
+                    break
+                self._set_aside(line, str(rejection))
+                continue
             except Exception as error:
                 logging.debug(f"spool drain stopped: {type(error).__name__}: {error}")
+                remaining = lines[index:]
+                stopped = True
                 break
             delivered += 1
-        remaining = lines[delivered:]
         try:
             if remaining:
-                self.spool.write_text("\n".join(remaining) + "\n", encoding="utf-8")
+                # Rewrite beside, then rename: a crash between truncating and
+                # writing would lose every line still owed.
+                scratch = self.spool.with_name(self.spool.name + ".tmp")
+                scratch.write_text("\n".join(remaining) + "\n", encoding="utf-8")
+                os.replace(scratch, self.spool)
             else:
                 self.spool.unlink()
         except Exception as error:
@@ -192,7 +267,7 @@ class BodyLink:
             logging.info(
                 f"drained {delivered} spooled utterance(s); {len(remaining)} left"
             )
-        return not remaining
+        return not stopped
 
     async def drain_forever(self, interval: float = SPOOL_DRAIN_INTERVAL) -> None:
         while True:

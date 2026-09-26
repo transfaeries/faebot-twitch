@@ -251,6 +251,13 @@ class TestSaidNothing:
         assert not core.said_nothing("")
         assert not core.said_nothing("   ")
 
+    def test_a_sentinel_wearing_the_speaker_tag_is_still_silence(self):
+        """The model sometimes repeats the prompt's "faebot:" — on a pass too.
+        Without the strip the bare word would reach chat."""
+        completion = core.Completion(text="faebot: NOTHING-TO-SAY — letting fae focus")
+        assert completion.passed
+        assert completion.reason_for_passing == "letting fae focus"
+
     def test_prompt_tells_faebot_the_verb(self):
         conv = core.Conversation(channel="c")
         prompt = core.build_system_prompt(conv, "c", "t", "g", [])

@@ -87,7 +87,8 @@ Environment for the wire: `BODY_URL` (the ear's target, default `http://127.0.0.
 ### Setup
 
 ```bash
-poetry install
+poetry install              # the body (and the tests)
+poetry install --with ear   # on the machine that runs the ear: adds torch, Whisper, VAD
 ```
 
 Set the following environment variables (we use a fish secrets file):
@@ -113,7 +114,7 @@ This starts the Twitch bot with its dashboard at `http://localhost:8000` and the
 Body and ear on two machines — the body where the diary is, the ear where the GPU is:
 ```bash
 poetry run python local.py --role body                      # on the body's machine
-BODY_URL=http://body-host:8000 poetry run python local.py --role ear   # on the ear's machine
+BODY_URL=http://body-host:8000 poetry run python local.py --role ear   # on the ear's machine (installed --with ear)
 ```
 
 Bot only (no voice):

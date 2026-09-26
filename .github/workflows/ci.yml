@@ -1,7 +1,7 @@
 # The gate, on every PR and on main — the same shape as faebot-core's.
 # The matrix runs what deploys (3.11 — the Dockerfile) and what fae runs
-# locally (3.13). Note: `poetry install` pulls torch + faster-whisper because
-# server.py imports them at module top; that is the slow part of this job.
+# locally (3.13). The ear's hearing (torch, faster-whisper, silero-vad) is an
+# optional group the tests never import, so the gate installs without it.
 name: CI
 
 on:

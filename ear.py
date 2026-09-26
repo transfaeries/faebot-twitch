@@ -292,10 +292,17 @@ def create_ear_app(link: BodyLink | None = None) -> FastAPI:
     the one that wants the GPU.
     """
     # Imported here, not at module top: the ear's models are the one thing in
-    # this repo that needs torch + CUDA, and the body must import nothing of it.
-    from silero_vad import load_silero_vad, VADIterator
-    from faster_whisper import WhisperModel
-    import torch
+    # this repo that needs torch + CUDA, and the body must import nothing of it
+    # (they're an optional dependency group the body doesn't install).
+    try:
+        from silero_vad import load_silero_vad, VADIterator
+        from faster_whisper import WhisperModel
+        import torch
+    except ImportError as error:
+        raise SystemExit(
+            f"the ear's hearing isn't installed ({error.name}) — on the ear's "
+            "machine: poetry install --with ear"
+        ) from error
 
     app = FastAPI()
     link = link or BodyLink()

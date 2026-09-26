@@ -7,6 +7,7 @@ are swallowed, and a write that succeeds is faithful.
 
 import json
 
+import datetime
 import pytest
 
 import capture
@@ -28,7 +29,7 @@ def enabled(tmp_path, monkeypatch):
 def read_events(capture_dir):
     """All captured events across files, in order."""
     events = []
-    for path in sorted(capture_dir.glob("twitch-*.jsonl")):
+    for path in sorted(capture_dir.glob("**/twitch-*.jsonl")):
         for line in path.read_text(encoding="utf-8").splitlines():
             events.append(json.loads(line))
     return events
@@ -151,3 +152,14 @@ class TestNeverBreaksTheBot:
         ouroboros["self"] = ouroboros
         capture.record("chat", content=ouroboros)  # must not raise
         assert read_events(enabled) == []  # nothing written, no torn line
+
+
+def test_captures_land_in_a_folder_per_month(enabled):
+    """A file per UTC day, inside a folder per month."""
+    capture.record("raw", line="PING")
+    now = datetime.datetime.now(datetime.UTC)
+    expected = (
+        enabled / now.strftime("%Y-%m") / f"twitch-{now.strftime('%Y%m%d')}.jsonl"
+    )
+    assert expected.is_file()
+    assert list(enabled.glob("twitch-*.jsonl")) == []  # nothing at the top level

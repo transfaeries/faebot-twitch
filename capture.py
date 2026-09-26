@@ -45,9 +45,13 @@ def is_enabled() -> bool:
 
 
 def _capture_path() -> str:
-    """Date-stamped file inside the capture dir (UTC, so multi-day is unambiguous)."""
-    today = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
-    return os.path.join(CAPTURE_DIR, f"twitch-{today}.jsonl")
+    """A file per UTC day, in a folder per month, inside the capture dir —
+    `2026-09/twitch-20260926.jsonl`. Days keep a stream's file small; months
+    keep the directory readable after years of them."""
+    now = datetime.datetime.now(datetime.UTC)
+    return os.path.join(
+        CAPTURE_DIR, now.strftime("%Y-%m"), f"twitch-{now.strftime('%Y%m%d')}.jsonl"
+    )
 
 
 def record(kind: str, **fields) -> None:
@@ -64,8 +68,9 @@ def record(kind: str, **fields) -> None:
             "captured_at": datetime.datetime.now(datetime.UTC).isoformat(),
             **fields,
         }
-        os.makedirs(CAPTURE_DIR, exist_ok=True)
-        with open(_capture_path(), "a", encoding="utf-8") as capture_file:
+        path = _capture_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as capture_file:
             capture_file.write(
                 json.dumps(event, ensure_ascii=False, default=str) + "\n"
             )

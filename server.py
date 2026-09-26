@@ -32,6 +32,10 @@ logging.basicConfig(
 EAR_TOKEN = getenv("EAR_TOKEN", "")
 STREAMER_CHANNEL = getenv("STREAMER_CHANNEL", "transfaeries")
 BODY_PORT = int(getenv("BODY_PORT", "8000"))
+# Where the body listens. Every interface by default; on a machine with other
+# networks, bind the one the ear reaches it by (a tailnet address) — the
+# dashboard shows prompts, and prompts carry chat.
+BODY_HOST = getenv("BODY_HOST", "0.0.0.0")
 # How many utterance ids the body remembers for de-duplication. A stream is a
 # few thousand lines; a repeat arrives within seconds to minutes (a retry, or
 # the spool draining), so this is far more than needed.
@@ -199,4 +203,4 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
 
 if __name__ == "__main__":
     app = create_app()
-    uvicorn.run(app, host="0.0.0.0", port=BODY_PORT)
+    uvicorn.run(app, host=BODY_HOST, port=BODY_PORT)

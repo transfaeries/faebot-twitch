@@ -49,7 +49,7 @@ async def main(role: str = "both"):
     if run_body:
         from twitchio.errors import AuthenticationError  # noqa: F401
         from bot import Faebot
-        from server import create_app, BODY_PORT
+        from server import create_app, BODY_HOST, BODY_PORT
 
         # Check for required env vars before anything heavy
         if not os.getenv("TWITCH_TOKEN"):
@@ -62,7 +62,7 @@ async def main(role: str = "both"):
         bot = Faebot(event_queue=events)
         body_app = create_app(bot=bot, events=events)
         body_server = uvicorn.Server(
-            uvicorn.Config(body_app, host="0.0.0.0", port=BODY_PORT, log_level="info")
+            uvicorn.Config(body_app, host=BODY_HOST, port=BODY_PORT, log_level="info")
         )
         services.append(body_server)
 

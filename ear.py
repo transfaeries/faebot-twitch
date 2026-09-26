@@ -29,6 +29,7 @@ import datetime
 import json
 import logging
 import os
+import uuid
 import uvicorn
 import numpy as np
 
@@ -60,8 +61,12 @@ def utterance(
 ) -> dict:
     """One heard thing, as the body receives it. `heard_at` is the ear's clock
     at transcription time, so a line delivered late from the spool still says
-    when it was said."""
+    when it was said. `utterance_id` names this line once and for good: the
+    wire delivers at least once (a timeout after the body took the line
+    sends it again), and the body answers a repeat of an id it already has
+    without hearing it twice."""
     return {
+        "utterance_id": uuid.uuid4().hex,
         "text": text,
         "language": language,
         "language_probability": language_probability,

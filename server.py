@@ -11,7 +11,7 @@ No ML models load here; the body is light.
 """
 
 from pathlib import Path
-from collections import deque
+from collections import OrderedDict, deque
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
@@ -32,6 +32,10 @@ logging.basicConfig(
 EAR_TOKEN = getenv("EAR_TOKEN", "")
 STREAMER_CHANNEL = getenv("STREAMER_CHANNEL", "transfaeries")
 BODY_PORT = int(getenv("BODY_PORT", "8000"))
+# How many utterance ids the body remembers for de-duplication. A stream is a
+# few thousand lines; a repeat arrives within seconds to minutes (a retry, or
+# the spool draining), so this is far more than needed.
+HEARD_IDS_KEPT = int(getenv("HEARD_IDS_KEPT", "4096"))
 
 
 def create_app(bot=None, events: asyncio.Queue | None = None):
@@ -43,6 +47,13 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
     app = FastAPI()
     app.state.bot = bot
     app.state.events = events
+    # The body's memory of utterance ids it has taken, newest last, each with
+    # its answer (a future while the line is still being handled) — so a
+    # repeat, even one that arrives while the first is in flight, gets the
+    # same answer and is never heard twice. Bounded; a body restart forgets,
+    # which is the one repeat this can't catch.
+    heard_ids: OrderedDict[str, asyncio.Future] = OrderedDict()
+    app.state.heard_ids = heard_ids
 
     # Dashboard event plumbing: a single drain task pulls from the generation
     # queue into a ring buffer and fans out to connected /ws/events clients.
@@ -115,6 +126,17 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
         if app.state.bot is None:
             return JSONResponse({"error": "no body listening"}, status_code=503)
         text = payload["text"]
+        utterance_id = payload.get("utterance_id")
+        if isinstance(utterance_id, str) and utterance_id:
+            if utterance_id in heard_ids:
+                answer = await asyncio.shield(heard_ids[utterance_id])
+                logging.info(f"/hear: {utterance_id} again — answered once already")
+                return JSONResponse({**answer, "repeat": True})
+            heard_ids[utterance_id] = asyncio.get_running_loop().create_future()
+            while len(heard_ids) > HEARD_IDS_KEPT:
+                heard_ids.popitem(last=False)
+        else:
+            utterance_id = None
         whisper_meta = {
             key: payload.get(key)
             for key in (
@@ -124,12 +146,28 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
                 "no_speech_prob",
                 "heard_at",
                 "whisper_prompt",
+                "utterance_id",
             )
         }
-        why = await app.state.bot.handle_transcription(
-            STREAMER_CHANNEL, text, **whisper_meta
-        )
-        return JSONResponse({"heard": why is None, "why": why})
+        try:
+            why = await app.state.bot.handle_transcription(
+                STREAMER_CHANNEL, text, **whisper_meta
+            )
+        except BaseException as error:
+            # A line that failed to be heard can be offered again: forget
+            # its id, and tell anyone waiting on it.
+            if utterance_id is not None:
+                future = heard_ids.pop(utterance_id, None)
+                if future is not None and not future.done():
+                    future.set_exception(error)
+                    future.exception()  # retrieved, so it isn't logged as lost
+            raise
+        answer = {"heard": why is None, "why": why}
+        if utterance_id is not None:
+            future = heard_ids.get(utterance_id)
+            if future is not None and not future.done():
+                future.set_result(answer)
+        return JSONResponse(answer)
 
     @app.websocket("/ws/events")
     async def events_websocket(websocket: WebSocket) -> None:

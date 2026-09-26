@@ -54,7 +54,9 @@ async def main(role: str = "both"):
         # Check for required env vars before anything heavy
         if not os.getenv("TWITCH_TOKEN"):
             logging.error("TWITCH_TOKEN not set. Did you forget to source secrets?\n")
-            return
+            # Non-zero, so a supervisor (systemd's Restart=on-failure) sees a
+            # failure and retries rather than taking it for a clean stop.
+            raise SystemExit(1)
 
         # Shared event queue: core.generate_response writes generation events,
         # server.py's /ws/events drains them to connected dashboards.
@@ -126,6 +128,7 @@ async def main(role: str = "both"):
         # by type so the ear-only role never needs twitchio.
         if type(error).__name__ == "AuthenticationError":
             logging.error("Twitch authentication failed. Your token may be expired.\n")
+            raise SystemExit(1)
         else:
             raise
     except asyncio.CancelledError:

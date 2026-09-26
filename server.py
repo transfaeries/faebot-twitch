@@ -55,7 +55,9 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
     # its answer (a future while the line is still being handled) — so a
     # repeat, even one that arrives while the first is in flight, gets the
     # same answer and is never heard twice. Bounded; a body restart forgets,
-    # which is the one repeat this can't catch.
+    # which is the one repeat this can't catch. It lives in this process:
+    # run the body as one process, or a repeat landing on a sibling worker
+    # would be heard again.
     heard_ids: OrderedDict[str, asyncio.Future] = OrderedDict()
     app.state.heard_ids = heard_ids
 

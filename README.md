@@ -16,23 +16,32 @@ This repo is the Twitch side of faebot. Fae also lives on [Discord](https://gith
 
 ## Architecture
 
-```
-local.py    — entry point, wires everything together, owns logging config
-faebot.py   — Twitch bot (TwitchIO), conversation management, generation logic, commands
-server.py   — FastAPI app: dashboard, audio WebSocket, VAD + Whisper pipeline
-```
+faebot is a **body** and an **ear**, joined by one small HTTP wire, so they can run on one machine or two.
 
-`local.py` starts both the Twitch bot and the FastAPI server in a single async process via `asyncio.gather()`. The server holds a reference to the bot, so voice transcriptions flow directly into faebot's conversation context as in-process method calls.
+```
+local.py    — entry point: --role body | ear | both (default both); owns logging config
+bot.py      — the body: Twitch bot (TwitchIO), event handlers, the filters on what faebot hears
+core.py     — conversation management, generation logic, reply decisions
+commands.py — fb;/fae; chat commands
+capture.py  — the capture tap (append-only JSONL of everything the body perceives)
+server.py   — the body's FastAPI app: the generations dashboard, /ws/events, and /hear
+ear.py      — the ear: mic page, audio WebSocket, Silero VAD, faster-whisper (GPU), delivery to the body
+```
 
 ### Voice pipeline
 
 ```
-Browser mic → WebSocket → Silero VAD → faster-whisper (GPU) → transcription → faebot
+Browser mic → WebSocket → Silero VAD → faster-whisper (GPU) → POST /hear → the body → faebot
+        (the ear, port 8001)                                        (the body, port 8000)
 ```
 
-The dashboard serves a web page that captures microphone audio and streams it over WebSocket. Silero VAD detects speech boundaries. Whisper transcribes each utterance in a dedicated thread executor (keeping CUDA calls off the event loop). Transcriptions are filtered for known hallucinations and prompt echoes before reaching faebot.
+The ear serves the mic page, cuts the audio into utterances with Silero VAD, transcribes each one with Whisper in a dedicated thread executor (keeping CUDA calls off the event loop), and POSTs the transcription with Whisper's metadata to the body's `/hear`. The ear knows nothing about Twitch and holds no Twitch credentials; it filters nothing but silence. **The body decides what faebot heard** — known mistranscriptions, Whisper echoing its own prompt on near-silence, caption-idiom bursts transcribed faster than anyone talks — and answers the ear with `heard` or `why` not. A line faebot didn't hear is still captured, marked `heard: false` with its reason, so the record keeps what the ear threw away without pretending faebot heard it.
 
-Whisper has two-tier self-recovery: if the executor times out on a stale thread, faebot replaces just the thread. If it times out on a fresh thread, fae reloads the entire Whisper model to recover from corrupted CUDA state.
+If the body can't be reached, the ear retries once, then spools the utterance to disk (`ear-spool.jsonl`) and drains the spool in order when the body is back — nothing heard is lost, and nothing arrives out of order.
+
+Whisper has two-tier self-recovery: if the executor times out on a stale thread, the ear replaces just the thread. If it times out on a fresh thread, it reloads the entire Whisper model to recover from corrupted CUDA state.
+
+Environment for the wire: `BODY_URL` (the ear's target, default `http://127.0.0.1:8000`), `EAR_TOKEN` (a shared secret; unset means any caller on the body's network may speak into it), `EAR_PORT` / `BODY_PORT`, `STREAMER_CHANNEL` (whose voice the body hears).
 
 ### Resilience
 
@@ -95,11 +104,17 @@ set -x MODEL "google/gemini-2.5-flash"  # optional, this is the default
 
 All commands can be run with `poetry run` or from within an activated venv.
 
-With voice integration (recommended):
+Body and ear on one machine:
 ```bash
 poetry run python local.py
 ```
-This starts both the Twitch bot and the dashboard at `http://localhost:8000`. Open the dashboard in a browser to enable voice capture.
+This starts the Twitch bot with its dashboard at `http://localhost:8000` and the ear at `http://localhost:8001`. Open the ear's page in a browser to start listening.
+
+Body and ear on two machines — the body where the diary is, the ear where the GPU is:
+```bash
+poetry run python local.py --role body                      # on the body's machine
+BODY_URL=http://body-host:8000 poetry run python local.py --role ear   # on the ear's machine
+```
 
 Bot only (no voice):
 ```bash

@@ -1,13 +1,11 @@
-"""Tests for server.py — FastAPI endpoints and event broadcasting.
-
-Note: /ws/audio tests involving VAD and Whisper are deferred to a separate effort
-due to the complexity of mocking audio processing and CUDA models.
-"""
+"""Tests for server.py — the body's endpoints: the dashboard, /ws/events, /hear."""
 
 import asyncio
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
+
+from server import create_app
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
@@ -21,24 +19,23 @@ def event_queue():
 
 @pytest.fixture
 def test_app(event_queue):
-    """Create a test FastAPI app with mocked VAD/Whisper models."""
-    # Mock the heavy ML models before importing server
-    with patch("server.load_silero_vad") as mock_vad, patch(
-        "server.WhisperModel"
-    ) as mock_whisper:
-        mock_vad.return_value = MagicMock()
-        mock_whisper.return_value = MagicMock()
-
-        from server import create_app
-
-        app = create_app(bot=None, events=event_queue)
-        yield app
+    """The body's app with no bot attached."""
+    return create_app(bot=None, events=event_queue)
 
 
 @pytest.fixture
 def client(test_app):
     """TestClient for the FastAPI app."""
     return TestClient(test_app)
+
+
+class FakeBot:
+    """Stands in for Faebot at the /hear door: records what it was handed and
+    answers with a scripted verdict."""
+
+    def __init__(self, why=None):
+        self.why = why
+        self.handle_transcription = AsyncMock(return_value=why)
 
 
 # ── GET / ────────────────────────────────────────────────────────────
@@ -51,12 +48,87 @@ class TestHomeEndpoint:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
 
-    def test_contains_dashboard_elements(self, client):
-        """Dashboard should contain expected elements."""
-        response = client.get("/")
-        html = response.text
-        # Check for key dashboard elements
-        assert "dashboard" in html.lower() or "faebot" in html.lower()
+    def test_is_the_body_page_not_the_ear(self, client):
+        """The body's page shows generations; the mic lives on the ear now."""
+        html = client.get("/").text
+        assert "Generations" in html
+        assert "Audio Capture" not in html
+
+
+# ── /hear ────────────────────────────────────────────────────────────
+
+
+class TestHear:
+    def test_hands_the_line_to_the_bot(self, event_queue):
+        bot = FakeBot()
+        app = create_app(bot=bot, events=event_queue)
+        with patch("server.STREAMER_CHANNEL", "transfaeries"):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/hear",
+                    json={
+                        "text": "hello chat",
+                        "language": "en",
+                        "language_probability": 0.9,
+                        "duration": 1.2,
+                        "no_speech_prob": 0.01,
+                        "heard_at": "2026-09-23T14:00:00+00:00",
+                        "whisper_prompt": "faebot, transfaeries",
+                    },
+                )
+        assert response.status_code == 200
+        assert response.json() == {"heard": True, "why": None}
+        bot.handle_transcription.assert_awaited_once()
+        args, kwargs = bot.handle_transcription.call_args
+        assert args == ("transfaeries", "hello chat")
+        assert kwargs["duration"] == 1.2
+        assert kwargs["heard_at"] == "2026-09-23T14:00:00+00:00"
+        assert kwargs["whisper_prompt"] == "faebot, transfaeries"
+
+    def test_reports_why_the_bot_did_not_hear(self, event_queue):
+        bot = FakeBot(why="outro-bleed")
+        app = create_app(bot=bot, events=event_queue)
+        with TestClient(app) as client:
+            response = client.post("/hear", json={"text": "thanks for watching"})
+        assert response.json() == {"heard": False, "why": "outro-bleed"}
+
+    def test_wrong_token_is_refused(self, event_queue):
+        bot = FakeBot()
+        app = create_app(bot=bot, events=event_queue)
+        with patch("server.EAR_TOKEN", "secret"):
+            with TestClient(app) as client:
+                refused = client.post("/hear", json={"text": "hi"})
+                wrong = client.post(
+                    "/hear", json={"text": "hi"}, headers={"X-Ear-Token": "nope"}
+                )
+                right = client.post(
+                    "/hear", json={"text": "hi"}, headers={"X-Ear-Token": "secret"}
+                )
+        assert refused.status_code == 403
+        assert wrong.status_code == 403
+        assert right.status_code == 200
+        bot.handle_transcription.assert_awaited_once()
+
+    def test_no_token_configured_accepts_anyone(self, event_queue):
+        bot = FakeBot()
+        app = create_app(bot=bot, events=event_queue)
+        with patch("server.EAR_TOKEN", ""):
+            with TestClient(app) as client:
+                response = client.post("/hear", json={"text": "hi"})
+        assert response.status_code == 200
+
+    def test_bad_payloads_are_rejected(self, event_queue):
+        bot = FakeBot()
+        app = create_app(bot=bot, events=event_queue)
+        with TestClient(app) as client:
+            assert client.post("/hear", content=b"not json").status_code == 400
+            assert client.post("/hear", json={"nope": 1}).status_code == 400
+            assert client.post("/hear", json=["a list"]).status_code == 400
+        bot.handle_transcription.assert_not_awaited()
+
+    def test_no_bot_is_503(self, client):
+        response = client.post("/hear", json={"text": "hi"})
+        assert response.status_code == 503
 
 
 # ── /ws/events ───────────────────────────────────────────────────────
@@ -70,14 +142,11 @@ class TestEventsWebSocket:
 
     def test_replays_history_on_connect(self, test_app, event_queue):
         """New connections should receive event history from ring buffer."""
-        # Pre-populate the ring buffer via the drain task
-        # First, we need to manually add to event_history
         test_app.state.event_history.append({"type": "test", "id": "1"})
         test_app.state.event_history.append({"type": "test", "id": "2"})
 
         with TestClient(test_app) as client:
             with client.websocket_connect("/ws/events") as websocket:
-                # Should receive the two historical events
                 event1 = websocket.receive_json()
                 event2 = websocket.receive_json()
 
@@ -85,23 +154,12 @@ class TestEventsWebSocket:
                 assert event2["id"] == "2"
 
     def test_receives_live_events(self, test_app, event_queue):
-        """Connected clients should receive events pushed to the queue."""
+        """Events pushed to the queue reach the ring buffer and later clients."""
         with TestClient(test_app) as client:
-            with client.websocket_connect("/ws/events") as websocket:
-                # The drain task should be running, so push an event
-                # We need to push directly to clients since drain is async
+            with client.websocket_connect("/ws/events"):
                 test_event = {"type": "response", "id": "live-1", "text": "hello"}
-
-                # Push to all connected clients directly (simulating drain)
-                async def push_event():
-                    for ws in list(test_app.state.event_clients):
-                        await ws.send_json(test_event)
-
-                # Can't easily run async in sync test context, so test via history
-                # Instead, add to history and reconnect
                 test_app.state.event_history.append(test_event)
 
-        # Verify by reconnecting
         with TestClient(test_app) as client:
             with client.websocket_connect("/ws/events") as websocket:
                 event = websocket.receive_json()
@@ -115,67 +173,17 @@ class TestEventDrain:
     @pytest.mark.asyncio
     async def test_drain_adds_to_history(self, event_queue):
         """Events from queue should be added to ring buffer."""
-        with patch("server.load_silero_vad") as mock_vad, patch(
-            "server.WhisperModel"
-        ) as mock_whisper:
-            mock_vad.return_value = MagicMock()
-            mock_whisper.return_value = MagicMock()
-
-            from server import create_app
-
-            app = create_app(bot=None, events=event_queue)
-
-            # Push an event to the queue
-            await event_queue.put({"type": "test", "id": "drain-1"})
-
-            # Give drain task time to process (if running)
-            await asyncio.sleep(0.1)
-
-            # In a real app lifecycle, the drain task would pick this up
-            # For unit testing, we verify the queue mechanics work
-            assert event_queue.qsize() == 1 or len(app.state.event_history) > 0
+        app = create_app(bot=None, events=event_queue)
+        await event_queue.put({"type": "test", "id": "drain-1"})
+        await asyncio.sleep(0.1)
+        assert event_queue.qsize() == 1 or len(app.state.event_history) > 0
 
     @pytest.mark.asyncio
     async def test_event_history_capped_at_50(self):
         """Ring buffer should cap at 50 events."""
-        with patch("server.load_silero_vad") as mock_vad, patch(
-            "server.WhisperModel"
-        ) as mock_whisper:
-            mock_vad.return_value = MagicMock()
-            mock_whisper.return_value = MagicMock()
-
-            from server import create_app
-
-            event_queue = asyncio.Queue()
-            app = create_app(bot=None, events=event_queue)
-
-            # Add 60 events to history
-            for i in range(60):
-                app.state.event_history.append({"id": str(i)})
-
-            # Should only keep last 50
-            assert len(app.state.event_history) == 50
-            assert app.state.event_history[0]["id"] == "10"  # First 10 dropped
-            assert app.state.event_history[-1]["id"] == "59"
-
-
-# ── /ws/audio (deferred) ─────────────────────────────────────────────
-
-
-class TestAudioWebSocket:
-    """Tests for /ws/audio are deferred due to VAD/Whisper mocking complexity.
-
-    The audio websocket involves:
-    - Silero VAD model (torch-based)
-    - faster-whisper model (CUDA/CPU)
-    - Audio byte stream processing
-    - ThreadPoolExecutor for transcription
-
-    These would require extensive mocking of ML models and audio processing.
-    Recommend as a separate effort with proper integration test infrastructure.
-    """
-
-    def test_placeholder_for_audio_tests(self):
-        """Placeholder to track that audio tests are intentionally deferred."""
-        # See ROADMAP.md for the audio WebSocket test effort
-        pass
+        app = create_app(bot=None, events=asyncio.Queue())
+        for i in range(60):
+            app.state.event_history.append({"id": str(i)})
+        assert len(app.state.event_history) == 50
+        assert app.state.event_history[0]["id"] == "10"
+        assert app.state.event_history[-1]["id"] == "59"

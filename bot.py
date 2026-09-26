@@ -96,17 +96,48 @@ class Faebot(commands.Bot, FaebotCommands):
                 return None
         return text
 
-    async def handle_transcription(self, channel_name: str, text: str, **whisper_meta):
+    def why_unheard(self, text: str, **whisper_meta) -> str | None:
+        """Why faebot did NOT hear a transcription — or None if fae did.
+
+        The ear sends everything it transcribes; this is where the body
+        decides what was actually said. Eyes catch a lot of things that
+        brains filter out. Three reasons, named so the record can carry them:
+        `banned` (a known mistranscription), `prompt-echo` (Whisper repeating
+        its own priming on near-silence), `outro-bleed` (a caption-idiom burst
+        transcribed far faster than anyone talks).
+        """
+        if self.filter_transcription(text) is None:
+            return "banned"
+        prompt = whisper_meta.get("whisper_prompt") or core.WHISPER_PROMPT
+        if core.is_prompt_echo(text, prompt):
+            return "prompt-echo"
+        if core.is_outro_bleed(text, whisper_meta.get("duration")):
+            return "outro-bleed"
+        return None
+
+    async def handle_transcription(
+        self, channel_name: str, text: str, **whisper_meta
+    ) -> str | None:
         """Handle a voice transcription from the streamer.
 
-        `whisper_meta` (language, language_probability, duration…) is optional and
-        used only for capture — a modality=voice Observation with real
-        metadata. It does not affect generation, so callers may omit it.
+        `whisper_meta` (language, language_probability, duration, heard_at,
+        whisper_prompt…) is optional. It is written to the capture — a
+        modality=voice Observation with real metadata — and `duration` and
+        `whisper_prompt` feed the filters; nothing in it affects generation.
+
+        Returns None when faebot heard the line, or the reason fae didn't.
+        A line fae didn't hear is still captured, marked `heard: false` with
+        its `why`: the record keeps what the ear threw away, so faebot's
+        memory can say how much was discarded and where to look, without
+        painting a memory fae never had.
         """
-        filtered = self.filter_transcription(text)
-        if filtered is None:
-            return
-        text = filtered
+        why = self.why_unheard(text, **whisper_meta)
+        if why is not None:
+            logging.debug(f"unheard ({why}): {text}")
+            capture.record_voice(
+                channel_name, text, heard=False, why=why, **whisper_meta
+            )
+            return why
 
         # Capture tap — the streamer's voice (modality=voice), with Whisper meta.
         capture.record_voice(channel_name, text, **whisper_meta)
@@ -136,6 +167,7 @@ class Faebot(commands.Bot, FaebotCommands):
                 asyncio.create_task(
                     self._generate_and_send(channel_name, trigger_type="voice")
                 )
+        return None
 
     async def _generate_and_send(self, channel_name: str, trigger_type: str = "chat"):
         """Fetch channel info, generate a response via core, and send it to chat.

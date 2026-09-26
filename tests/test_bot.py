@@ -31,13 +31,53 @@ class TestFilterTranscription:
 
 class TestHandleTranscription:
     @pytest.mark.asyncio
-    async def test_filtered_text_skipped(self, mock_faebot):
-        """Transcriptions containing banned strings should be skipped entirely."""
+    async def test_banned_text_is_unheard_but_kept(self, mock_faebot):
+        """A banned mistranscription never reaches the chatlog — but the
+        capture keeps it, marked unheard, with the reason."""
         core.ensure_conversation("testchannel")
 
-        await mock_faebot.handle_transcription("testchannel", "go to faebot.com")
+        with patch("bot.capture.record_voice") as record_voice:
+            why = await mock_faebot.handle_transcription(
+                "testchannel", "go to faebot.com", duration=1.0
+            )
 
-        # Chatlog should be empty - nothing was added
+        assert why == "banned"
+        assert core.conversations["testchannel"].chatlog == []
+        record_voice.assert_called_once()
+        args, kwargs = record_voice.call_args
+        assert args == ("testchannel", "go to faebot.com")
+        assert kwargs["heard"] is False
+        assert kwargs["why"] == "banned"
+        assert kwargs["duration"] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_prompt_echo_is_unheard(self, mock_faebot):
+        """The ear sends everything; the body is where Whisper's echo of its
+        own prompt gets filtered — with the prompt the ear says it used."""
+        core.ensure_conversation("testchannel")
+
+        why = await mock_faebot.handle_transcription(
+            "testchannel",
+            "faebot, transfaeries.",
+            whisper_prompt="faebot, transfaeries",
+        )
+
+        assert why == "prompt-echo"
+        assert core.conversations["testchannel"].chatlog == []
+
+    @pytest.mark.asyncio
+    async def test_outro_bleed_is_unheard(self, mock_faebot):
+        """A caption-idiom burst transcribed far faster than speech."""
+        core.ensure_conversation("testchannel")
+
+        why = await mock_faebot.handle_transcription(
+            "testchannel",
+            "thanks for watching please subscribe thanks for watching please "
+            "subscribe thanks for watching please subscribe",
+            duration=1.5,
+        )
+
+        assert why == "outro-bleed"
         assert core.conversations["testchannel"].chatlog == []
 
     @pytest.mark.asyncio
@@ -45,11 +85,17 @@ class TestHandleTranscription:
         """Valid transcriptions should be added to the channel's chatlog."""
         core.ensure_conversation("testchannel")
 
-        await mock_faebot.handle_transcription("testchannel", "hello chat")
+        with patch("bot.capture.record_voice") as record_voice:
+            why = await mock_faebot.handle_transcription(
+                "testchannel", "hello chat", duration=0.8
+            )
 
+        assert why is None
         assert len(core.conversations["testchannel"].chatlog) == 1
         assert "[streamer voice]" in core.conversations["testchannel"].chatlog[0]
         assert "hello chat" in core.conversations["testchannel"].chatlog[0]
+        record_voice.assert_called_once()
+        assert "heard" not in record_voice.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_voice_activation_triggers_generation(self, mock_faebot):

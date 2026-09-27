@@ -124,10 +124,15 @@ class TestHear:
         bot = FakeBot(why="outro-bleed")
         app = create_app(bot=bot, events=event_queue)
         line = {"text": "thanks for watching", "utterance_id": "abc123"}
-        with TestClient(app) as client:
-            first = client.post("/hear", json=line)
-            again = client.post("/hear", json=line)
-            other = client.post("/hear", json={**line, "utterance_id": "def456"})
+        with patch("capture.record_hear_repeat") as stutter:
+            with TestClient(app) as client:
+                first = client.post("/hear", json=line)
+                again = client.post("/hear", json=line)
+                other = client.post("/hear", json={**line, "utterance_id": "def456"})
+        # the wire's stutter is recorded once — the line itself was heard once
+        stutter.assert_called_once_with(
+            "abc123", "thanks for watching", {"heard": False, "why": "outro-bleed"}
+        )
         assert first.json() == {"heard": False, "why": "outro-bleed"}
         assert again.json() == {"heard": False, "why": "outro-bleed", "repeat": True}
         assert other.json() == {"heard": False, "why": "outro-bleed"}

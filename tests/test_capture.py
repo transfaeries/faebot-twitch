@@ -163,3 +163,12 @@ def test_captures_land_in_a_folder_per_month(enabled):
     )
     assert expected.is_file()
     assert list(enabled.glob("twitch-*.jsonl")) == []  # nothing at the top level
+
+
+def test_a_repeat_on_the_wire_is_its_own_kind(enabled):
+    """The ear's stutter is kept as a fact about the wire, not as speech."""
+    capture.record_hear_repeat("abc", "hello", {"heard": True, "why": None})
+    (event,) = read_events(enabled)
+    assert event["kind"] == "hear_repeat"
+    assert event["utterance_id"] == "abc" and event["text"] == "hello"
+    assert event["answer"] == {"heard": True, "why": None}

@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from os import getenv
 import asyncio
+import capture
 import logging
 import uvicorn
 
@@ -137,6 +138,7 @@ def create_app(bot=None, events: asyncio.Queue | None = None):
             if utterance_id in heard_ids:
                 answer = await asyncio.shield(heard_ids[utterance_id])
                 logging.info(f"/hear: {utterance_id} again — answered once already")
+                capture.record_hear_repeat(utterance_id, text, answer)
                 return JSONResponse({**answer, "repeat": True})
             heard_ids[utterance_id] = asyncio.get_running_loop().create_future()
             while len(heard_ids) > HEARD_IDS_KEPT:

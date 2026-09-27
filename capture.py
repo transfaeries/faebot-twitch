@@ -122,6 +122,20 @@ def record_usernotice(channel, tags) -> None:
         logging.debug(f"capture_usernotice failed: {type(error).__name__}: {error}")
 
 
+def record_hear_repeat(utterance_id: str, text: str, answer: dict) -> None:
+    """The ear sent a line the body had already taken — a stutter on the
+    wire (a retry after a timeout, or the spool draining a line that had in
+    fact landed). The line was heard once; this row says the wire reached
+    twice. A fact about the wire, not about what was said: kept in the
+    record, never rendered as speech."""
+    if not is_enabled():
+        return
+    try:
+        record("hear_repeat", utterance_id=utterance_id, text=text, answer=answer)
+    except Exception as error:
+        logging.debug(f"capture_hear_repeat failed: {type(error).__name__}: {error}")
+
+
 def record_voice(channel_name: str, text: str, **whisper_meta) -> None:
     """Record a Whisper voice transcription (the streamer's speech). `whisper_meta`
     carries language/probability/duration — metadata for a modality=voice Observation,

@@ -17,6 +17,14 @@ websockets = "^14.0"
 numpy = "^2.0.0"
 aiohttp = "^3.11.0"
 jinja2 = "^3.1.0"
+
+# The ear's hearing — VAD, Whisper, the GPU. Only the ear imports them, and
+# lazily, so the body installs without: on the ear's machine,
+# `poetry install --with ear`.
+[tool.poetry.group.ear]
+optional = true
+
+[tool.poetry.group.ear.dependencies]
 faster-whisper = "^1.0.0"
 torch = "^2.0.0"
 silero-vad = "^6.2.0"
@@ -30,6 +38,7 @@ pytest = "^9.0.2"
 pytest-asyncio = "^1.3.0"
 pytest-cov = "^7.1.0"
 aioresponses = "^0.7.8"
+httpx = "^0.28.1"
 
 [build-system]
 requires = ["poetry-core"]
@@ -39,5 +48,5 @@ build-backend = "poetry.core.masonry.api"
 testpaths = ["tests"]
 
 [[tool.mypy.overrides]]
-module = ["twitchio", "twitchio.*", "silero_vad", "faster_whisper"]
+module = ["twitchio", "twitchio.*", "silero_vad", "faster_whisper", "torch"]
 ignore_missing_imports = true

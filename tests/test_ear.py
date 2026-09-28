@@ -207,3 +207,13 @@ class TestSpool:
             json.loads(row)["text"] for row in link.spool.read_text().splitlines()
         ] == ["one"]
         assert not link.set_aside.exists()
+
+
+def test_every_utterance_carries_its_own_id():
+    """The ear names each line once; the spool keeps the name, so a line
+    delivered late is still recognisably the same line."""
+    first, second = ear.utterance("a", "en", 0.9, 1.0, 0.01), ear.utterance(
+        "a", "en", 0.9, 1.0, 0.01
+    )
+    assert first["utterance_id"] and second["utterance_id"]
+    assert first["utterance_id"] != second["utterance_id"]

@@ -117,6 +117,92 @@ class TestHear:
                 response = client.post("/hear", json={"text": "hi"})
         assert response.status_code == 200
 
+    def test_a_repeated_utterance_is_heard_once(self, event_queue):
+        """The wire delivers at least once: a timeout after the body took the
+        line sends it again. The same id gets the first answer back and is
+        never handed to the bot twice."""
+        bot = FakeBot(why="outro-bleed")
+        app = create_app(bot=bot, events=event_queue)
+        line = {"text": "thanks for watching", "utterance_id": "abc123"}
+        with patch("capture.record_hear_repeat") as stutter:
+            with TestClient(app) as client:
+                first = client.post("/hear", json=line)
+                again = client.post("/hear", json=line)
+                other = client.post("/hear", json={**line, "utterance_id": "def456"})
+        # the wire's stutter is recorded once — the line itself was heard once
+        stutter.assert_called_once_with(
+            "abc123", "thanks for watching", {"heard": False, "why": "outro-bleed"}
+        )
+        assert first.json() == {"heard": False, "why": "outro-bleed"}
+        assert again.json() == {"heard": False, "why": "outro-bleed", "repeat": True}
+        assert other.json() == {"heard": False, "why": "outro-bleed"}
+        assert bot.handle_transcription.await_count == 2
+        assert bot.handle_transcription.call_args.kwargs["utterance_id"] == "def456"
+
+    def test_a_line_without_an_id_is_never_deduplicated(self, event_queue):
+        """An ear from before the id: every delivery is heard, as it was."""
+        bot = FakeBot()
+        app = create_app(bot=bot, events=event_queue)
+        with TestClient(app) as client:
+            client.post("/hear", json={"text": "hi"})
+            client.post("/hear", json={"text": "hi"})
+        assert bot.handle_transcription.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_repeat_while_the_first_is_in_flight_waits_for_its_answer(
+        self, event_queue
+    ):
+        """The retry that matters arrives while the body is still answering
+        the first delivery — it must wait for that answer, not start a second."""
+        import httpx
+
+        release = asyncio.Event()
+
+        async def slow_hearing(channel, text, **meta):
+            await release.wait()
+            return None
+
+        bot = FakeBot()
+        bot.handle_transcription = AsyncMock(side_effect=slow_hearing)
+        app = create_app(bot=bot, events=event_queue)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://body"
+        ) as client:
+            line = {"text": "hello", "utterance_id": "inflight"}
+            first = asyncio.create_task(client.post("/hear", json=line))
+            await asyncio.sleep(0.05)
+            second = asyncio.create_task(client.post("/hear", json=line))
+            await asyncio.sleep(0.05)
+            release.set()
+            first_response, second_response = await first, await second
+        assert first_response.json() == {"heard": True, "why": None}
+        assert second_response.json() == {"heard": True, "why": None, "repeat": True}
+        assert bot.handle_transcription.await_count == 1
+
+    def test_a_line_that_failed_can_be_offered_again(self, event_queue):
+        """If hearing the line blew up, its id is forgotten, so the ear's retry
+        is heard rather than answered with a failure it can't recover from."""
+        bot = FakeBot()
+        bot.handle_transcription = AsyncMock(side_effect=[RuntimeError("boom"), None])
+        app = create_app(bot=bot, events=event_queue)
+        line = {"text": "hello", "utterance_id": "flaky"}
+        with TestClient(app, raise_server_exceptions=False) as client:
+            failed = client.post("/hear", json=line)
+            retried = client.post("/hear", json=line)
+        assert failed.status_code == 500
+        assert retried.json() == {"heard": True, "why": None}
+        assert bot.handle_transcription.await_count == 2
+
+    def test_the_id_memory_is_bounded(self, event_queue):
+        bot = FakeBot()
+        app = create_app(bot=bot, events=event_queue)
+        with patch("server.HEARD_IDS_KEPT", 2):
+            with TestClient(app) as client:
+                for name in ("one", "two", "three"):
+                    client.post("/hear", json={"text": "x", "utterance_id": name})
+        assert list(app.state.heard_ids) == ["two", "three"]
+
     def test_bad_payloads_are_rejected(self, event_queue):
         bot = FakeBot()
         app = create_app(bot=bot, events=event_queue)

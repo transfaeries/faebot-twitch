@@ -49,12 +49,14 @@ async def main(role: str = "both"):
     if run_body:
         from twitchio.errors import AuthenticationError  # noqa: F401
         from bot import Faebot
-        from server import create_app, BODY_PORT
+        from server import create_app, BODY_HOST, BODY_PORT
 
         # Check for required env vars before anything heavy
         if not os.getenv("TWITCH_TOKEN"):
             logging.error("TWITCH_TOKEN not set. Did you forget to source secrets?\n")
-            return
+            # Non-zero, so a supervisor (systemd's Restart=on-failure) sees a
+            # failure and retries rather than taking it for a clean stop.
+            raise SystemExit(1)
 
         # Shared event queue: core.generate_response writes generation events,
         # server.py's /ws/events drains them to connected dashboards.
@@ -62,7 +64,7 @@ async def main(role: str = "both"):
         bot = Faebot(event_queue=events)
         body_app = create_app(bot=bot, events=events)
         body_server = uvicorn.Server(
-            uvicorn.Config(body_app, host="0.0.0.0", port=BODY_PORT, log_level="info")
+            uvicorn.Config(body_app, host=BODY_HOST, port=BODY_PORT, log_level="info")
         )
         services.append(body_server)
 
@@ -126,6 +128,7 @@ async def main(role: str = "both"):
         # by type so the ear-only role never needs twitchio.
         if type(error).__name__ == "AuthenticationError":
             logging.error("Twitch authentication failed. Your token may be expired.\n")
+            raise SystemExit(1)
         else:
             raise
     except asyncio.CancelledError:

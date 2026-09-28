@@ -41,7 +41,7 @@ If the body can't be reached, the ear retries once, then spools the utterance to
 
 Whisper has two-tier self-recovery: if the executor times out on a stale thread, the ear replaces just the thread. If it times out on a fresh thread, it reloads the entire Whisper model to recover from corrupted CUDA state.
 
-Environment for the wire: `BODY_URL` (the ear's target, default `http://127.0.0.1:8000`), `EAR_TOKEN` (a shared secret; unset means any caller on the body's network may speak into it), `EAR_PORT` / `BODY_PORT`, `STREAMER_CHANNEL` (whose voice the body hears).
+Environment for the wire: `BODY_URL` (the ear's target, default `http://127.0.0.1:8000`), `EAR_TOKEN` (a shared secret; unset means any caller on the body's network may speak into it), `EAR_PORT` / `BODY_PORT`, `BODY_HOST` (the interface the body listens on, default every one), `STREAMER_CHANNEL` (whose voice the body hears), `HEARD_IDS_KEPT` (how many utterance ids the body remembers so a line the ear re-sends is heard once). Captures go to `TWITCH_CAPTURE_DIR`, a file per UTC day in a folder per month.
 
 ### Resilience
 
@@ -87,7 +87,8 @@ Environment for the wire: `BODY_URL` (the ear's target, default `http://127.0.0.
 ### Setup
 
 ```bash
-poetry install
+poetry install              # the body (and the tests)
+poetry install --with ear   # on the machine that runs the ear: adds torch, Whisper, VAD
 ```
 
 Set the following environment variables (we use a fish secrets file):
@@ -113,7 +114,7 @@ This starts the Twitch bot with its dashboard at `http://localhost:8000` and the
 Body and ear on two machines — the body where the diary is, the ear where the GPU is:
 ```bash
 poetry run python local.py --role body                      # on the body's machine
-BODY_URL=http://body-host:8000 poetry run python local.py --role ear   # on the ear's machine
+BODY_URL=http://body-host:8000 poetry run python local.py --role ear   # on the ear's machine (installed --with ear)
 ```
 
 Bot only (no voice):

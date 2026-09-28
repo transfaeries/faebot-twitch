@@ -29,6 +29,7 @@ import datetime
 import json
 import logging
 import os
+import uuid
 import uvicorn
 import numpy as np
 
@@ -60,8 +61,12 @@ def utterance(
 ) -> dict:
     """One heard thing, as the body receives it. `heard_at` is the ear's clock
     at transcription time, so a line delivered late from the spool still says
-    when it was said."""
+    when it was said. `utterance_id` names this line once and for good: the
+    wire delivers at least once (a timeout after the body took the line
+    sends it again), and the body answers a repeat of an id it already has
+    without hearing it twice."""
     return {
+        "utterance_id": uuid.uuid4().hex,
         "text": text,
         "language": language,
         "language_probability": language_probability,
@@ -287,10 +292,17 @@ def create_ear_app(link: BodyLink | None = None) -> FastAPI:
     the one that wants the GPU.
     """
     # Imported here, not at module top: the ear's models are the one thing in
-    # this repo that needs torch + CUDA, and the body must import nothing of it.
-    from silero_vad import load_silero_vad, VADIterator
-    from faster_whisper import WhisperModel
-    import torch
+    # this repo that needs torch + CUDA, and the body must import nothing of it
+    # (they're an optional dependency group the body doesn't install).
+    try:
+        from silero_vad import load_silero_vad, VADIterator
+        from faster_whisper import WhisperModel
+        import torch
+    except ImportError as error:
+        raise SystemExit(
+            f"the ear's hearing isn't installed ({error.name}) — on the ear's "
+            "machine: poetry install --with ear"
+        ) from error
 
     app = FastAPI()
     link = link or BodyLink()

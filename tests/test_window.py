@@ -88,7 +88,7 @@ class TestWindowLine:
 class TestReadBack:
     def test_depth_is_the_live_windows_not_more(self, record):
         record(*[row("chat", 60 - i, author="a", content=str(i)) for i in range(60)])
-        lines, last = window.read_back("testchannel", 50, NOW)
+        lines, last, _ = window.read_back("testchannel", 50, NOW)
         assert len(lines) == 50
         assert lines[-1] == "a: 59"  # the newest line is last
         assert lines[0] == "a: 10"
@@ -106,7 +106,7 @@ class TestReadBack:
             day=yesterday,
         )
         record(row("chat", 1, author="early", content="morning"))
-        lines, _ = window.read_back("testchannel", 50, NOW)
+        lines, _, _ = window.read_back("testchannel", 50, NOW)
         assert lines == ["late: night", "early: morning"]
 
     def test_other_channels_and_torn_lines_are_skipped(self, record, tmp_path):
@@ -124,12 +124,62 @@ class TestReadBack:
                 '{"kind": "chat", "captured_at": "2026-10-01T02:0\n'
             )  # a crash mid-write
         record(row("chat", 1, author="a", content="whole"))
-        lines, last = window.read_back("testchannel", 50, NOW)
+        lines, last, _ = window.read_back("testchannel", 50, NOW)
         assert lines == ["a: whole"]
         assert last["content"] == "whole"
 
+    def test_a_long_stop_still_finds_her_last_lines(self, record):
+        """A machine down for a week: the record is older than yesterday,
+        and the seam must never say 'nothing' when there is record."""
+        week_ago = NOW - datetime.timedelta(days=7)
+        record(
+            {
+                "kind": "chat",
+                "captured_at": week_ago.isoformat(),
+                "channel": "testchannel",
+                "author": "a",
+                "content": "last week",
+            },
+            day=week_ago,
+        )
+        lines, last, last_line = window.read_back("testchannel", 50, NOW)
+        assert lines == ["a: last week"]
+        assert last["content"] == "last week" and last_line is last
+
+    def test_a_cleared_memory_is_the_floor(self, record):
+        cleared = core.machinery_line(
+            "faebot's memory of this room was cleared by a mod at 02:00 UTC"
+        )
+        record(
+            row("chat", 20, author="a", content="before"),
+            row("clear", 10, line=cleared, by="mod"),
+            row("chat", 5, author="a", content="after"),
+        )
+        lines, _, _ = window.read_back("testchannel", 50, NOW)
+        assert lines == [cleared, "a: after"]
+
+    def test_the_clock_is_her_last_window_line_not_the_records_last_row(self, record):
+        record(
+            row("chat", 30, author="a", content="hi"),
+            row("usernotice", 2, notice_type="raid", system_message="a raid"),
+        )
+        lines, last, last_line = window.read_back("testchannel", 50, NOW)
+        assert last["kind"] == "usernotice"
+        assert last_line["content"] == "hi"
+        seam, chosen = window.seam(len(lines), last, NOW, last_line)
+        assert "30 minutes ago" in seam and chosen is False
+
+    def test_the_alias_ask_is_the_one_command_kept(self):
+        assert (
+            window.window_line(row("chat", author="miku", content="fae;alias Miku"))
+            == "miku: fae;alias Miku"
+        )
+        assert (
+            window.window_line(row("chat", author="miku", content="fae;alias")) is None
+        )
+
     def test_nothing_to_read(self, record):
-        assert window.read_back("testchannel", 50, NOW) == ([], None)
+        assert window.read_back("testchannel", 50, NOW) == ([], None, None)
 
 
 class TestSeam:

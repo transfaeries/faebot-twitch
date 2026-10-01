@@ -108,7 +108,7 @@ _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNOR
 # or dark, a title that changed — wears this label and never her name, so
 # nothing she reads back teaches her to say it: the machinery speaks in its
 # own name about what the machinery did. (The old form, `faebot: *stays
-# quiet*`, was a line in her voice that she could, and on discord did, copy.)
+# quiet*`, was a line in her voice — a line she could copy.)
 MACHINERY = "[the machinery]"
 PASS_MARK = "faebot was here and chose quiet"
 # The mark coming back whole as her answer is the pass she meant, the same
@@ -127,8 +127,9 @@ def machinery_line(text: str) -> str:
 
 
 def echoed_mark(text: str) -> bool:
-    """Is this answer nothing but the machinery's pass mark, echoed?"""
-    return bool(_BARE_MARK_PATTERN.match(text))
+    """Is this answer nothing but the machinery's pass mark, echoed? The
+    speaker tag is stripped here too, so a raw answer can be asked."""
+    return bool(_BARE_MARK_PATTERN.match(strip_speaker_tag(text)))
 
 
 def history_floor(history: int) -> int:

@@ -209,7 +209,8 @@ class TestModCommands:
         instance = FaebotCommands()
         await instance.clear._callback(instance, ctx)
 
-        assert conv.chatlog == []
+        # not empty: the clear leaves the machinery's own line as the floor
+        assert len(conv.chatlog) == 1 and conv.chatlog[0].startswith(core.MACHINERY)
 
     @pytest.mark.asyncio
     async def test_freq_check_current(self, mock_context):
@@ -425,3 +426,47 @@ class TestAdminCommands:
             await instance.model._callback(instance, ctx)
 
         assert conv.model == "anthropic/claude-3-haiku"
+
+
+# ── the window is one store: clear and alias leave their mark (cut C) ──
+
+
+class TestWindowMirror:
+    @pytest.mark.asyncio
+    async def test_clear_leaves_the_machinerys_line_and_a_row(self, mock_context):
+        """A cleared memory is the read-back's floor — so the clear itself
+        must be in the record, or the next wake would undo it."""
+        from commands import FaebotCommands
+        from unittest.mock import patch
+
+        ctx = mock_context("fae;clear", is_mod=True, author_name="themod")
+        conversation = core.ensure_conversation("testchannel")
+        conversation.chatlog = ["a: hi", "faebot: hello"]
+        instance = FaebotCommands()
+        with patch("commands.capture.record_clear") as record_clear:
+            await instance.clear._callback(instance, ctx)
+        assert len(conversation.chatlog) == 1
+        line = conversation.chatlog[0]
+        assert line.startswith(core.MACHINERY) and "cleared by a mod" in line
+        record_clear.assert_called_once_with("testchannel", line, by="themod")
+
+    @pytest.mark.asyncio
+    async def test_alias_reply_is_recorded_as_her_line(self, mock_context):
+        from commands import FaebotCommands
+        from unittest.mock import patch
+
+        ctx = mock_context("fae;alias Miku", author_name="hatsunemikuisbestwaifu")
+        conversation = core.ensure_conversation("testchannel")
+        instance = FaebotCommands()
+        with patch("commands.capture.record_faebot_message") as record_message:
+            await instance.alias._callback(instance, ctx)
+        assert conversation.chatlog == [
+            "hatsunemikuisbestwaifu: fae;alias Miku",
+            "faebot: Got it! From now on I'll think of you as Miku",
+        ]
+        record_message.assert_called_once_with(
+            "testchannel",
+            "Got it! From now on I'll think of you as Miku",
+            trigger_type="command",
+            command="alias",
+        )

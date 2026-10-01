@@ -19,9 +19,15 @@ import datetime
 import json
 import logging
 import os
+import re
 
 import capture
 import core
+
+
+# The one command the live window keeps (commands.py's alias handler appends
+# the ask and the reply), so the read-back keeps it too.
+_ALIAS_ASK = re.compile(r"^(?:fae|fb);alias\s+\S")
 
 
 # Capture rows that are lines in her window, rendered exactly as the live
@@ -34,7 +40,7 @@ def window_line(event: dict) -> str | None:
         if event.get("echo"):
             return None  # her own line; the send-point row carries it
         content = event.get("content") or ""
-        if content.startswith(("!", "fb;", "fae;")):
+        if content.startswith(("!", "fb;", "fae;")) and not _ALIAS_ASK.match(content):
             return None  # commands never reached the chatlog live either
         author = event.get("author") or ""
         return f"{core.aliases.get(author, author)}: {content}"
@@ -46,7 +52,7 @@ def window_line(event: dict) -> str | None:
         return f"faebot: {event.get('text') or ''}"
     if kind == "faebot_pass":
         return core.machinery_line(core.PASS_MARK)
-    if kind in ("stream_state", "wake", "restart"):
+    if kind in ("stream_state", "wake", "restart", "clear"):
         # The machinery's own lines, kept verbatim in the record.
         return event.get("line") or None
     return None
@@ -70,28 +76,51 @@ def _rows(path: str, channel: str) -> list[dict]:
     return rows
 
 
+# How many days back the read-back will look for her window. A long stop
+# (a machine down for a week) still finds the last lines she lived, so the
+# seam never says "nothing in the record" when there is record.
+DAYS_BACK = int(os.getenv("WINDOW_DAYS_BACK", "30"))
+
+
 def read_back(
     channel: str, depth: int, now: datetime.datetime | None = None
-) -> tuple[list[str], dict | None]:
-    """The last `depth` window lines about `channel` from the record (oldest
-    first), and the record's last row about the channel of ANY kind — the
-    wake's clock and its witness to whether the stop was chosen. Reads
-    today's file and yesterday's: a stream crosses UTC midnight most nights."""
+) -> tuple[list[str], dict | None, dict | None]:
+    """The last `depth` window lines about `channel` from the record
+    (oldest first); the newest row about the channel of ANY kind — the
+    wake's witness to whether the stop was chosen; and the newest row that
+    was a line in her window — the seam's clock. Walks back a day at a time
+    until the window is full or the record runs out, a cleared memory
+    (`clear`) being the floor: nothing before it comes back."""
     now = now or datetime.datetime.now(datetime.UTC)
-    rows: list[dict] = []
-    for days_ago in (1, 0):
-        day = now - datetime.timedelta(days=days_ago)
-        rows.extend(_rows(capture.path_for(day), channel))
-    last = rows[-1] if rows else None
     lines: list[str] = []
-    for event in reversed(rows):
-        line = window_line(event)
-        if line is not None:
+    last: dict | None = None
+    last_line: dict | None = None
+    for days_ago in range(DAYS_BACK + 1):
+        day = now - datetime.timedelta(days=days_ago)
+        rows = _rows(capture.path_for(day), channel)
+        if last is None and rows:
+            last = rows[-1]
+        for event in reversed(rows):
+            if event.get("kind") == "clear":
+                lines.append(
+                    event.get("line")
+                    or core.machinery_line("the memory was cleared here")
+                )
+                if last_line is None:
+                    last_line = event
+                lines.reverse()
+                return lines, last, last_line
+            line = window_line(event)
+            if line is None:
+                continue
+            if last_line is None:
+                last_line = event
             lines.append(line)
             if len(lines) >= depth:
-                break
+                lines.reverse()
+                return lines, last, last_line
     lines.reverse()
-    return lines, last
+    return lines, last, last_line
 
 
 def _clock(stamp: str | None) -> datetime.datetime | None:
@@ -114,10 +143,16 @@ def _ago(then: datetime.datetime, now: datetime.datetime) -> str:
 
 
 def seam(
-    lines: int, last: dict | None, now: datetime.datetime
+    lines: int,
+    last: dict | None,
+    now: datetime.datetime,
+    last_line: dict | None = None,
 ) -> tuple[str, bool | None]:
     """The machinery's line under a read-back window, and whether the stop
-    before this wake was chosen (None when the record has nothing to say)."""
+    before this wake was chosen (None when the record has nothing to say).
+    `last` is the record's newest row (the witness to a chosen stop); the
+    clock is `last_line`'s, the newest line that was in her window — a
+    room event or a machinery fact after it is not her memory."""
     when = now.strftime("%H:%M UTC")
     if last is None:
         return (
@@ -126,7 +161,8 @@ def seam(
             ),
             None,
         )
-    last_at = _clock(last.get("captured_at"))
+    clock_row = last_line or last
+    last_at = _clock(clock_row.get("captured_at"))
     ago = f", {_ago(last_at, now)}" if last_at else ""
     last_clock = last_at.strftime("%H:%M UTC") if last_at else "an unknown time"
     chosen = last.get("kind") == "restart"
@@ -138,7 +174,7 @@ def seam(
     else:
         text = (
             f"faebot's body is back at {when} after a stop that wasn't chosen; the "
-            f"{lines} lines above were read back from the record, whose last line was "
+            f"{lines} lines above were read back from the record, the last of them "
             f"at {last_clock}{ago} — what happened between isn't in it"
         )
     return core.machinery_line(text), chosen
@@ -151,12 +187,12 @@ def restore(
     The seam goes to the record too, so the next wake can read it back."""
     now = now or datetime.datetime.now(datetime.UTC)
     try:
-        lines, last = read_back(channel, depth, now)
+        lines, last, last_line = read_back(channel, depth, now)
     except Exception as error:
         # The read-back must never keep the body from waking.
         logging.warning(f"window read-back failed: {type(error).__name__}: {error}")
-        lines, last = [], None
-    seam_line, chosen = seam(len(lines), last, now)
+        lines, last, last_line = [], None, None
+    seam_line, chosen = seam(len(lines), last, now, last_line)
     logging.info(f"window for {channel}: {len(lines)} lines read back; {seam_line}")
     capture.record_wake(
         channel,

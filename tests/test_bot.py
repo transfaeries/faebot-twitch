@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
 import core
 
 
@@ -553,3 +553,18 @@ class TestWake:
         assert len(mock_faebot.watch_tasks) == 1
         for task in mock_faebot.watch_tasks:
             task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_ready_in_no_channel_yet_does_not_count_as_the_wake(
+        self, mock_faebot
+    ):
+        with patch.object(
+            type(mock_faebot),
+            "connected_channels",
+            new_callable=PropertyMock,
+            return_value=[],
+        ):
+            with patch("bot.window.restore") as restore:
+                assert await mock_faebot.wake() is False
+        restore.assert_not_called()
+        assert mock_faebot.watch_tasks == []

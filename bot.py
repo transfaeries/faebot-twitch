@@ -66,12 +66,19 @@ class Faebot(commands.Bot, FaebotCommands):
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
         if not self.woke:
-            self.woke = True
-            await self.wake()
+            self.woke = await self.wake()
 
-    async def wake(self):
+    async def wake(self) -> bool:
         """The body waking: her window read back from the record with the
-        seam under it, then the stream watch started. Once per process."""
+        seam under it, then the stream watch started. Once per process —
+        but only once there is a channel to wake in: on a slow join
+        `event_ready` can fire with none, and the next one should try again.
+        Returns whether the wake happened."""
+        if not self.connected_channels:
+            logging.warning(
+                "ready, but in no channel yet — the wake waits for the next ready"
+            )
+            return False
         for channel in self.connected_channels:
             conversation = core.ensure_conversation(channel.name)
             if capture.is_enabled():
@@ -83,6 +90,7 @@ class Faebot(commands.Bot, FaebotCommands):
                     self.stream_watch.watch(self, channel.name, self.event_queue)
                 )
             )
+        return True
 
     async def event_raw_data(self, data):
         """Capture tap — faithful catch-all. Every raw IRC line TwitchIO
@@ -346,6 +354,9 @@ class Faebot(commands.Bot, FaebotCommands):
         spoken by the machinery, in its own name. An outage never gets here:
         that stop gets the machinery's account at the next wake, not her words.
         """
+        # One budget for all her rooms, inside the unit's stop timeout —
+        # not one per room, or two rooms would outrun the force-exit.
+        deadline = asyncio.get_running_loop().time() + GOODNIGHT_SECONDS
         for connected in self.connected_channels:
             name = connected.name
             channel = self.get_channel(name)
@@ -367,7 +378,7 @@ class Faebot(commands.Bot, FaebotCommands):
             try:
                 outcome = await asyncio.wait_for(
                     self._generate_and_send(name, trigger_type="restart"),
-                    GOODNIGHT_SECONDS,
+                    max(0.0, deadline - asyncio.get_running_loop().time()),
                 )
             except asyncio.TimeoutError:
                 outcome = "timed-out"

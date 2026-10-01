@@ -93,14 +93,26 @@ async def main(role: str = "both"):
         """Wait for shutdown signal, then stop services in order."""
         await shutdown_event.wait()
 
-        # Force exit if graceful shutdown takes too long (stuck CUDA threads)
+        # Force exit if graceful shutdown takes too long (stuck CUDA threads).
+        # A body gets longer: a chosen stop lets faebot say goodnight first
+        # (bot.goodnight, bounded by GOODNIGHT_SECONDS), inside the unit's
+        # TimeoutStopSec.
         def _force_exit():
             logging.warning("Graceful shutdown timed out — forcing exit")
             os._exit(1)
 
-        force_timer = threading.Timer(10, _force_exit)
+        force_timer = threading.Timer(25 if bot is not None else 10, _force_exit)
         force_timer.daemon = True
         force_timer.start()
+
+        if bot is not None:
+            # Her last word before the body goes — while the chat line and the
+            # dashboard are still up to carry it. Never blocks the stop: a
+            # failure here is logged and the stop goes on.
+            try:
+                await bot.goodnight()
+            except Exception as error:
+                logging.warning(f"goodnight failed: {type(error).__name__}: {error}")
 
         if ear_app is not None:
             logging.info("Shutting down Whisper executor...")

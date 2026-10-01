@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 from aioresponses import aioresponses as aioresponses_ctx
 import core
@@ -159,4 +159,17 @@ def mock_faebot():
             )
             bot.part_channels = AsyncMock()
             bot.join_channels = AsyncMock()
-            yield bot
+            # cut (C): the stream watch and the wake, as __init__ would set them
+            import stream
+
+            bot.stream_watch = stream.StreamWatch()
+            bot.watch_tasks = []
+            bot.woke = False
+            # TwitchIO's property, read-only: the channels the bot is in
+            with patch.object(
+                Faebot,
+                "connected_channels",
+                new_callable=PropertyMock,
+                return_value=[MockChannel("testchannel")],
+            ):
+                yield bot

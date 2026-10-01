@@ -12,12 +12,23 @@ import uuid
 
 import core
 import capture
+import stream
+import window
 from commands import FaebotCommands
 
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
 VOICE_ACTIVATION = os.getenv("VOICE_ACTIVATION", "faebot dearest").lower()
+# A chosen stop: how long she gets to say her last word before the body
+# goes. Inside the unit's stop timeout (30 s) and local.py's force-exit.
+GOODNIGHT_SECONDS = float(os.getenv("GOODNIGHT_SECONDS", "15"))
+# A goodnight she wrote earlier, for a moment that doesn't let her speak:
+# spoken by the machinery in its own name, never as hers. Hers to revise.
+GOODNIGHT_FILE = os.getenv(
+    "GOODNIGHT_FILE",
+    os.path.join(capture.CAPTURE_DIR, "goodnight.txt") if capture.CAPTURE_DIR else "",
+)
 
 
 # set up logging
@@ -35,6 +46,13 @@ class Faebot(commands.Bot, FaebotCommands):
         self.whisper_filter: list[str] = [
             "faebot.com",
         ]
+        # The stream's state per channel, kept current by a poll (stream.py),
+        # and the tasks that keep it. Her window is read back from the record
+        # once per process (window.py); TwitchIO fires event_ready again on a
+        # reconnect, and a reconnect is not a wake.
+        self.stream_watch = stream.StreamWatch()
+        self.watch_tasks: list[asyncio.Task] = []
+        self.woke = False
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],
@@ -47,6 +65,24 @@ class Faebot(commands.Bot, FaebotCommands):
         logging.info(f"Logged in as | {self.nick}")
         logging.info(f"User id is | {self.user_id}")
         logging.info(f"Joined channels {INITIAL_CHANNELS}")
+        if not self.woke:
+            self.woke = True
+            await self.wake()
+
+    async def wake(self):
+        """The body waking: her window read back from the record with the
+        seam under it, then the stream watch started. Once per process."""
+        for channel in self.connected_channels:
+            conversation = core.ensure_conversation(channel.name)
+            if capture.is_enabled():
+                conversation.chatlog = window.restore(
+                    channel.name, conversation.history
+                )
+            self.watch_tasks.append(
+                asyncio.create_task(
+                    self.stream_watch.watch(self, channel.name, self.event_queue)
+                )
+            )
 
     async def event_raw_data(self, data):
         """Capture tap — faithful catch-all. Every raw IRC line TwitchIO
@@ -178,9 +214,16 @@ class Faebot(commands.Bot, FaebotCommands):
         """
         channel = self.get_channel(channel_name)
 
-        channel_info = await self.fetch_channel(channel_name)
-        stream_title = channel_info.title if channel_info else "Unknown"
-        game_name = channel_info.game_name if channel_info else "Unknown"
+        # The stream's state as the watch knows it; before its first read
+        # lands, the channel's standing title and game, state unknown.
+        state = self.stream_watch.state.get(channel_name)
+        if state is not None:
+            stream_title, game_name, live = state.title, state.game, state.live
+        else:
+            channel_info = await self.fetch_channel(channel_name)
+            stream_title = channel_info.title if channel_info else "Unknown"
+            game_name = channel_info.game_name if channel_info else "Unknown"
+            live = None
 
         generation_id = str(uuid.uuid4())
         try:
@@ -192,6 +235,7 @@ class Faebot(commands.Bot, FaebotCommands):
                 events=self.event_queue,
                 trigger_type=trigger_type,
                 generation_id=generation_id,
+                live=live,
             )
         except Exception as e:
             # core has already emitted an `error` event for this generation.
@@ -209,7 +253,7 @@ class Faebot(commands.Bot, FaebotCommands):
                 trigger_type=trigger_type,
                 elapsed=getattr(e, "elapsed", None),
             )
-            return
+            return "failed"
 
         if completion.passed:
             # faebot chose silence: nothing to chat, but the choice is kept —
@@ -231,7 +275,7 @@ class Faebot(commands.Bot, FaebotCommands):
                     **completion.capture_meta(),
                 },
             )
-            return
+            return "passed"
 
         response = completion.text
 
@@ -251,7 +295,7 @@ class Faebot(commands.Bot, FaebotCommands):
                     "error": f"twitch send failed: {type(e).__name__}: {e}",
                 },
             )
-            return
+            return "send-failed"
 
         # NOTE: this is optimistic. `channel.send` returning means TwitchIO
         # successfully transmitted the IRC PRIVMSG, NOT that Twitch delivered
@@ -281,6 +325,73 @@ class Faebot(commands.Bot, FaebotCommands):
                 **completion.capture_meta(),
             },
         )
+        return "said"
+
+    def saved_goodnight(self) -> str:
+        """The goodnight she wrote earlier, if there is one."""
+        if not GOODNIGHT_FILE or not os.path.exists(GOODNIGHT_FILE):
+            return ""
+        try:
+            with open(GOODNIGHT_FILE, encoding="utf-8") as goodnight_file:
+                return " ".join(goodnight_file.read().split())
+        except OSError as error:
+            logging.warning(f"could not read {GOODNIGHT_FILE}: {error}")
+            return ""
+
+    async def goodnight(self):
+        """A chosen stop: tell her a restart is coming, let her say her last
+        word (or pass — the room's state is stamped, the choice is hers), and
+        record what came of it. If the moment doesn't let her speak — the
+        call fails or runs out of time — the goodnight she saved earlier is
+        spoken by the machinery, in its own name. An outage never gets here:
+        that stop gets the machinery's account at the next wake, not her words.
+        """
+        for connected in self.connected_channels:
+            name = connected.name
+            channel = self.get_channel(name)
+            conversation = core.ensure_conversation(name)
+            state = self.stream_watch.state.get(name)
+            room = ""
+            if state is not None:
+                room = (
+                    " (the stream is live)"
+                    if state.live
+                    else " (the stream is offline)"
+                )
+            now = core.datetime.datetime.now(core.datetime.UTC).strftime("%H:%M UTC")
+            told = core.machinery_line(
+                f"a restart is coming at {now}{room} — this is faebot's last word before it"
+            )
+            conversation.chatlog.append(told)
+            logging.info(told)
+            try:
+                outcome = await asyncio.wait_for(
+                    self._generate_and_send(name, trigger_type="restart"),
+                    GOODNIGHT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                outcome = "timed-out"
+            except Exception as error:
+                logging.warning(f"goodnight failed: {type(error).__name__}: {error}")
+                outcome = "failed"
+            said = None
+            if outcome not in ("said", "passed"):
+                saved = self.saved_goodnight()
+                if saved:
+                    said = (
+                        "(faebot wrote this earlier, for a moment like this one — "
+                        f"the moment didn't let her say it herself) {saved}"
+                    )
+                    try:
+                        await channel.send(said[:499])
+                        outcome = "saved"
+                    except Exception as error:
+                        logging.warning(
+                            f"saved goodnight not sent: {type(error).__name__}: {error}"
+                        )
+                        outcome = "saved-send-failed"
+            capture.record_restart(name, told, how=outcome, said=said)
+            logging.info(f"goodnight in {name}: {outcome}")
 
     async def event_message(self, message):
         if message.echo:
@@ -325,7 +436,10 @@ class Faebot(commands.Bot, FaebotCommands):
             )
 
     async def close(self):
-        """Close the bot's resources gracefully."""
+        """Close the bot's resources gracefully. The goodnight is not here:
+        local.py says it first, while the chat line is still open."""
+        for task in self.watch_tasks:
+            task.cancel()
         await core.close_session()
         await super().close()
 

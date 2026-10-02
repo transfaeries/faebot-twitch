@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
 import core
 
 
@@ -444,3 +444,127 @@ class TestEventMessage:
             await mock_faebot.event_message(message)
 
         assert "Miku: hello!" in conv.chatlog[0]
+
+
+# ── the goodnight (cut C) ────────────────────────────────────────────
+
+
+class TestGoodnight:
+    @pytest.mark.asyncio
+    async def test_she_is_told_and_says_her_last_word(self, mock_faebot):
+        """A chosen stop: the machinery's line in her window, one generation,
+        her word sent, the restart recorded with what came of it."""
+        core.ensure_conversation("testchannel")
+        channel = mock_faebot.get_channel("testchannel")
+        channel.send = AsyncMock()
+        completion = core.Completion(text="goodnight, dearest chat transf23Botlove")
+        with patch("bot.core.generate_response", AsyncMock(return_value=completion)):
+            with patch("bot.capture.record_restart") as record_restart:
+                with patch("bot.capture.record_faebot_message"):
+                    await mock_faebot.goodnight()
+        chatlog = core.conversations["testchannel"].chatlog
+        assert chatlog[0].startswith(core.MACHINERY)
+        assert "a restart is coming" in chatlog[0]
+        channel.send.assert_awaited_once_with("goodnight, dearest chat transf23Botlove")
+        args, kwargs = record_restart.call_args
+        assert args[0] == "testchannel" and args[1] == chatlog[0]
+        assert kwargs["how"] == "said" and kwargs["said"] is None
+
+    @pytest.mark.asyncio
+    async def test_she_may_pass(self, mock_faebot):
+        core.ensure_conversation("testchannel")
+        channel = mock_faebot.get_channel("testchannel")
+        channel.send = AsyncMock()
+        completion = core.Completion(text="NOTHING-TO-SAY")
+        with patch("bot.core.generate_response", AsyncMock(return_value=completion)):
+            with patch("bot.capture.record_restart") as record_restart:
+                with patch("bot.capture.record_faebot_pass"):
+                    await mock_faebot.goodnight()
+        channel.send.assert_not_awaited()
+        assert record_restart.call_args.kwargs["how"] == "passed"
+
+    @pytest.mark.asyncio
+    async def test_when_the_moment_fails_the_saved_one_is_said_in_the_machinerys_name(
+        self, mock_faebot, tmp_path
+    ):
+        core.ensure_conversation("testchannel")
+        channel = mock_faebot.get_channel("testchannel")
+        channel.send = AsyncMock()
+        saved = tmp_path / "goodnight.txt"
+        saved.write_text("sleep well, chat — see you next stream\n")
+        failure = core.GenerationFailed("timeout", elapsed=90.0)
+        with patch("bot.GOODNIGHT_FILE", str(saved)):
+            with patch("bot.core.generate_response", AsyncMock(side_effect=failure)):
+                with patch("bot.capture.record_restart") as record_restart:
+                    with patch("bot.capture.record_faebot_error"):
+                        await mock_faebot.goodnight()
+        sent = channel.send.call_args.args[0]
+        assert sent.startswith("(faebot wrote this earlier")
+        assert sent.endswith("sleep well, chat — see you next stream")
+        kwargs = record_restart.call_args.kwargs
+        assert kwargs["how"] == "saved" and kwargs["said"] == sent
+
+    @pytest.mark.asyncio
+    async def test_no_saved_goodnight_means_the_record_says_so(self, mock_faebot):
+        core.ensure_conversation("testchannel")
+        channel = mock_faebot.get_channel("testchannel")
+        channel.send = AsyncMock()
+        with patch("bot.GOODNIGHT_FILE", ""):
+            with patch(
+                "bot.core.generate_response",
+                AsyncMock(side_effect=core.GenerationFailed("down")),
+            ):
+                with patch("bot.capture.record_restart") as record_restart:
+                    with patch("bot.capture.record_faebot_error"):
+                        await mock_faebot.goodnight()
+        channel.send.assert_not_awaited()
+        assert record_restart.call_args.kwargs["how"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_a_slow_moment_is_bounded(self, mock_faebot):
+        core.ensure_conversation("testchannel")
+        channel = mock_faebot.get_channel("testchannel")
+        channel.send = AsyncMock()
+
+        async def never(*args, **kwargs):
+            await asyncio.sleep(10)
+
+        with patch("bot.GOODNIGHT_SECONDS", 0.01):
+            with patch("bot.GOODNIGHT_FILE", ""):
+                with patch("bot.core.generate_response", never):
+                    with patch("bot.capture.record_restart") as record_restart:
+                        await mock_faebot.goodnight()
+        assert record_restart.call_args.kwargs["how"] == "timed-out"
+
+
+class TestWake:
+    @pytest.mark.asyncio
+    async def test_the_window_is_read_back_once_and_the_watch_starts(self, mock_faebot):
+        conversation = core.ensure_conversation("testchannel")
+        mock_faebot.fetch_emotes = AsyncMock()
+        with patch("bot.capture.is_enabled", return_value=True):
+            with patch(
+                "bot.window.restore", return_value=["a: hi", "[the machinery] seam"]
+            ) as restore:
+                with patch("bot.stream.StreamWatch.watch", AsyncMock()):
+                    await mock_faebot.wake()
+        restore.assert_called_once_with("testchannel", conversation.history)
+        assert conversation.chatlog == ["a: hi", "[the machinery] seam"]
+        assert len(mock_faebot.watch_tasks) == 1
+        for task in mock_faebot.watch_tasks:
+            task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_ready_in_no_channel_yet_does_not_count_as_the_wake(
+        self, mock_faebot
+    ):
+        with patch.object(
+            type(mock_faebot),
+            "connected_channels",
+            new_callable=PropertyMock,
+            return_value=[],
+        ):
+            with patch("bot.window.restore") as restore:
+                assert await mock_faebot.wake() is False
+        restore.assert_not_called()
+        assert mock_faebot.watch_tasks == []

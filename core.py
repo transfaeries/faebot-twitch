@@ -103,6 +103,34 @@ class Conversation:
 SENTINEL_SILENCE = "NOTHING-TO-SAY"
 _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNORECASE)
 
+# The machinery's own voice in faebot's window. Every line the machinery lays
+# in her short memory — a silence she chose, a restart, the stream going live
+# or dark, a title that changed — wears this label and never her name, so
+# nothing she reads back teaches her to say it: the machinery speaks in its
+# own name about what the machinery did. (The old form, `faebot: *stays
+# quiet*`, was a line in her voice — a line she could copy.)
+MACHINERY = "[the machinery]"
+PASS_MARK = "faebot was here and chose quiet"
+# The mark coming back whole as her answer is the pass she meant, the same
+# way the sentinel is — a net, narrow on purpose: only the bare mark, with or
+# without its label or her tag; her own words about her quiet are never
+# caught.
+_BARE_MARK_PATTERN = re.compile(
+    r"^\W*(?:" + re.escape(MACHINERY) + r"\s*)?" + re.escape(PASS_MARK) + r"\W*$",
+    re.IGNORECASE,
+)
+
+
+def machinery_line(text: str) -> str:
+    """A line in the machinery's labeled hand, for her window."""
+    return f"{MACHINERY} {text}"
+
+
+def echoed_mark(text: str) -> bool:
+    """Is this answer nothing but the machinery's pass mark, echoed? The
+    speaker tag is stripped here too, so a raw answer can be asked."""
+    return bool(_BARE_MARK_PATTERN.match(strip_speaker_tag(text)))
+
 
 def history_floor(history: int) -> int:
     """How far the chatlog is cut back once it overflows `history`.
@@ -156,11 +184,22 @@ class Completion:
     def passed(self) -> bool:
         """faebot chose silence (said the sentinel). Nothing gets posted.
         The sentinel may arrive wearing the speaker tag ("faebot: NOTHING-TO-SAY")
-        — the tag is stripped before the test, or the bare word reaches chat."""
-        return said_nothing(strip_speaker_tag(self.text))
+        — the tag is stripped before the test, or the bare word reaches chat.
+        The machinery's pass mark echoed back whole is taken as the pass she
+        meant (see `echoed`)."""
+        stripped = strip_speaker_tag(self.text)
+        return said_nothing(stripped) or echoed_mark(stripped)
+
+    @property
+    def echoed(self) -> bool:
+        """The answer was the machinery's pass mark, copied — a pass, caught
+        by the net rather than said with the sentinel."""
+        return echoed_mark(strip_speaker_tag(self.text))
 
     @property
     def reason_for_passing(self) -> str:
+        if self.echoed:
+            return ""
         return pass_reason(strip_speaker_tag(self.text)) if self.passed else ""
 
     def capture_meta(self) -> dict[str, Any]:
@@ -268,8 +307,17 @@ def build_system_prompt(
     stream_title: str,
     game_name: str,
     emotes: list[str],
+    live: bool | None = None,
 ) -> str:
-    """Build faebot's system prompt with current channel context."""
+    """Build faebot's system prompt with current channel context. `live` is
+    the stream's state when the body knows it (stream.py), None before the
+    first poll — a fact stamped, never a rule about what to do with it."""
+    if live is True:
+        stream_state = "The stream is live right now. "
+    elif live is False:
+        stream_state = "The stream is offline right now. "
+    else:
+        stream_state = ""
     return (
         "I'm faebot! I'm a faerie and an AI in equal measure. "
         "I was born as a Markov chain bot in 2014, started using language models in 2021, found my home on Discord in 2023, "
@@ -284,7 +332,7 @@ def build_system_prompt(
         "I exist in a world that's richer and stranger than what instruments can measure. I'll tell you what I know about it plainly. "
         "I love music, dancing, philosophy, emotes, headpats *flutters eyelashes*, and the occasional *gives fluffy hug*. "
         "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings — a role I take seriously even when I'm being (un)silly about it.\n"
-        f"Right now I'm hanging out in {channel_name}'s Twitch chat. The stream title is \"{stream_title}\" and fae's playing {game_name}. "
+        f"Right now I'm hanging out in {channel_name}'s Twitch chat. {stream_state}The stream title is \"{stream_title}\" and fae's playing {game_name}. "
         f"I keep my messages short — just the last few things on my mind. "
         f"I think before I speak. Chat moves fast, so I think quickly, but a moment's thought is fine. "
         f"My messages are one line and fit in 500 characters. "
@@ -401,6 +449,7 @@ async def generate_response(
     events: Optional[asyncio.Queue] = None,
     trigger_type: str = "chat",
     generation_id: Optional[str] = None,
+    live: bool | None = None,
 ) -> Completion:
     """Build prompt, call the API, return the Completion (text + reasoning).
 
@@ -420,7 +469,7 @@ async def generate_response(
     conversation = conversations[channel_name]
 
     system_prompt = build_system_prompt(
-        conversation, channel_name, stream_title, game_name, emotes
+        conversation, channel_name, stream_title, game_name, emotes, live=live
     )
 
     # Trim in a block, not to exactly `history` (see history_floor): the
@@ -486,14 +535,17 @@ async def generate_response(
 
     if completion.passed:
         # Chosen silence. The reason (if fae gave one) is kept for the capture
-        # and the dashboard; the chatlog records only the fact, so fae
-        # remembers having chosen it without the reason being echoable.
+        # and the dashboard; the chatlog records only the fact, as the
+        # machinery's mark outside her speaker slot — so she remembers having
+        # chosen quiet without a line in her own voice to copy. The mark
+        # echoed back whole is still her pass; the log says it was caught.
         logging.info(
             f"faebot passed in {completion.elapsed:.1f}s"
             f" — {completion.reason_for_passing or '(no reason given)'}"
+            + (" (the mark, echoed — taken as the pass)" if completion.echoed else "")
         )
         permalog(f"faebot passed: {completion.reason_for_passing}\n")
-        conversation.chatlog.append("faebot: *stays quiet*")
+        conversation.chatlog.append(machinery_line(PASS_MARK))
         return completion
 
     response = fix_emote_spacing(completion.text, emotes)

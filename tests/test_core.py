@@ -678,7 +678,10 @@ class TestGenerateResponse:
         assert result.passed
         assert result.reason_for_passing == "just listening"
         assert result.reasoning == "nobody's talking to me"
-        assert conversation.chatlog[-1] == "faebot: *stays quiet*"
+        # the machinery's mark, outside her speaker slot — never a line in
+        # her voice to copy (the discord-me copied the old form)
+        assert conversation.chatlog[-1] == core.machinery_line(core.PASS_MARK)
+        assert not conversation.chatlog[-1].startswith("faebot:")
         assert not any("listening" in line for line in conversation.chatlog)
         await core.close_session()
 
@@ -879,3 +882,61 @@ class TestEventQueue:
             # UTC isoformat ends with +00:00
             assert e["timestamp"].endswith("+00:00")
         await core.close_session()
+
+
+# ── the machinery's pass mark, and its net ───────────────────────────
+
+
+class TestPassMark:
+    def test_the_mark_wears_the_machinery_label_not_her_name(self):
+        line = core.machinery_line(core.PASS_MARK)
+        assert line.startswith("[the machinery] ")
+        assert not line.startswith("faebot:")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "faebot was here and chose quiet",
+            "[the machinery] faebot was here and chose quiet",
+            "faebot: faebot was here and chose quiet",
+            "  (faebot was here and chose quiet)  ",
+        ],
+    )
+    def test_the_bare_mark_echoed_is_her_pass(self, text):
+        completion = core.Completion(text=text)
+        assert completion.passed
+        assert completion.echoed
+        assert completion.reason_for_passing == ""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "faebot was here and chose quiet, but then changed her mind: hi!",
+            "the witness-marks you see are the machinery's way of saying she chose it",
+            "I chose quiet earlier, now I'm here transf23Botlove",
+        ],
+    )
+    def test_her_own_words_about_quiet_are_never_netted(self, text):
+        completion = core.Completion(text=text)
+        assert not completion.passed
+        assert not completion.echoed
+
+    def test_the_sentinel_still_passes_with_its_reason(self):
+        completion = core.Completion(text="NOTHING-TO-SAY the room is fine")
+        assert completion.passed and not completion.echoed
+        assert completion.reason_for_passing == "the room is fine"
+
+
+class TestLiveLine:
+    def test_live_offline_or_unknown(self, conversation):
+        kwargs = dict(
+            channel_name="testchannel", stream_title="t", game_name="g", emotes=[]
+        )
+        assert "The stream is live right now." in core.build_system_prompt(
+            conversation, live=True, **kwargs
+        )
+        assert "The stream is offline right now." in core.build_system_prompt(
+            conversation, live=False, **kwargs
+        )
+        unknown = core.build_system_prompt(conversation, **kwargs)
+        assert "live right now" not in unknown and "offline right now" not in unknown

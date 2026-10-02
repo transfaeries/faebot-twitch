@@ -44,14 +44,18 @@ def is_enabled() -> bool:
     return bool(CAPTURE_DIR)
 
 
-def _capture_path() -> str:
-    """A file per UTC day, in a folder per month, inside the capture dir —
-    `2026-09/twitch-20260926.jsonl`. Days keep a stream's file small; months
-    keep the directory readable after years of them."""
-    now = datetime.datetime.now(datetime.UTC)
+def path_for(day: datetime.datetime) -> str:
+    """The capture file for a UTC day — `2026-09/twitch-20260926.jsonl`
+    inside the capture dir. Days keep a stream's file small; months keep the
+    directory readable after years of them."""
     return os.path.join(
-        CAPTURE_DIR, now.strftime("%Y-%m"), f"twitch-{now.strftime('%Y%m%d')}.jsonl"
+        CAPTURE_DIR, day.strftime("%Y-%m"), f"twitch-{day.strftime('%Y%m%d')}.jsonl"
     )
+
+
+def _capture_path() -> str:
+    """Today's file."""
+    return path_for(datetime.datetime.now(datetime.UTC))
 
 
 def record(kind: str, **fields) -> None:
@@ -188,6 +192,57 @@ def record_faebot_error(channel_name: str, error: str, **meta) -> None:
         record("faebot_error", channel=channel_name, error=error, **meta)
     except Exception as err:
         logging.debug(f"capture_faebot_error failed: {type(err).__name__}: {err}")
+
+
+def record_stream_state(channel_name: str, line: str, **state) -> None:
+    """Record the stream's state as the body read it — the first read after
+    waking, and after that only when a fact CHANGED (live/offline, title,
+    game). `line` is the machinery's own sentence as it was laid in faebot's
+    window, kept verbatim so a wake can read it back; `state` is the fact."""
+    if not is_enabled():
+        return
+    try:
+        record("stream_state", channel=channel_name, line=line, **state)
+    except Exception as error:
+        logging.debug(f"capture_stream_state failed: {type(error).__name__}: {error}")
+
+
+def record_wake(channel_name: str, line: str, **meta) -> None:
+    """Record the body waking: the seam the machinery laid under the window
+    it read back from this record — when, how many lines, how long since the
+    record's last line, and whether the stop before it was chosen."""
+    if not is_enabled():
+        return
+    try:
+        record("wake", channel=channel_name, line=line, **meta)
+    except Exception as error:
+        logging.debug(f"capture_wake failed: {type(error).__name__}: {error}")
+
+
+def record_clear(channel_name: str, line: str, **meta) -> None:
+    """Record a mod clearing faebot's memory of a room — the machinery's
+    line, which the read-back takes as its floor: nothing before it comes
+    back on waking, so a cleared memory stays cleared across a restart."""
+    if not is_enabled():
+        return
+    try:
+        record("clear", channel=channel_name, line=line, **meta)
+    except Exception as error:
+        logging.debug(f"capture_clear failed: {type(error).__name__}: {error}")
+
+
+def record_restart(channel_name: str, line: str, **meta) -> None:
+    """Record a CHOSEN stop: the machinery told faebot a restart was coming
+    (`line`), and `meta` says what came of it — her own goodnight said (`how`
+    "said"), a pass, the saved goodnight spoken in her name ("saved"), or
+    nothing ("none"). A wake that finds this as the record's last row knows
+    the stop was chosen; one that doesn't knows it wasn't."""
+    if not is_enabled():
+        return
+    try:
+        record("restart", channel=channel_name, line=line, **meta)
+    except Exception as error:
+        logging.debug(f"capture_restart failed: {type(error).__name__}: {error}")
 
 
 # Pure protocol keepalives — no perceptual content, skipped so the raw catch-all

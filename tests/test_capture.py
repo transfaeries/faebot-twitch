@@ -172,3 +172,46 @@ def test_a_repeat_on_the_wire_is_its_own_kind(enabled):
     assert event["kind"] == "hear_repeat"
     assert event["utterance_id"] == "abc" and event["text"] == "hello"
     assert event["answer"] == {"heard": True, "why": None}
+
+
+# ── the machinery's own rows: stream state, wake, restart ────────────
+
+
+class TestMachineryRows:
+    @pytest.mark.parametrize(
+        "recorder, kind, extra",
+        [
+            (
+                capture.record_stream_state,
+                "stream_state",
+                {"live": True, "title": "t", "game": "g", "started_at": None},
+            ),
+            (
+                capture.record_wake,
+                "wake",
+                {"lines_read_back": 3, "stop_was_chosen": False},
+            ),
+            (capture.record_restart, "restart", {"how": "said", "said": None}),
+        ],
+    )
+    def test_each_row_keeps_the_line_and_its_facts(
+        self, enabled, recorder, kind, extra
+    ):
+        recorder("testchannel", "[the machinery] something happened", **extra)
+        rows = read_events(enabled)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["kind"] == kind
+        assert row["channel"] == "testchannel"
+        assert row["line"] == "[the machinery] something happened"
+        for key, value in extra.items():
+            assert row[key] == value
+
+    def test_disabled_is_a_no_op(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        capture.record_wake("testchannel", "line", lines_read_back=0)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_path_for_a_day(self, enabled):
+        day = datetime.datetime(2026, 9, 26, tzinfo=datetime.UTC)
+        assert capture.path_for(day).endswith("2026-09/twitch-20260926.jsonl")

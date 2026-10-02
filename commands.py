@@ -6,9 +6,11 @@ Faebot inherits from this class to gain all fb;/fae; commands.
 from twitchio.ext import commands
 from functools import wraps
 from typing import Awaitable, Callable
+import datetime
 import os
 import logging
 
+import capture
 import core
 
 
@@ -83,10 +85,18 @@ class FaebotCommands:
             new_alias = " ".join(arguments[1:])
             core.aliases[username] = new_alias
             reply = f"Got it! From now on I'll think of you as {new_alias}"
+            # The one command that lives in her window — so she knows who
+            # asked to be called what. Her window is read back from the
+            # record on waking (window.py), so the reply is recorded as her
+            # line the way a generated one is; the ask is the chat row the
+            # record already holds, which the read-back keeps for this command.
             core.conversations[ctx.channel.name].chatlog.append(
                 f"{username}: fae;alias {new_alias}"
             )
             core.conversations[ctx.channel.name].chatlog.append(f"faebot: {reply}")
+            capture.record_faebot_message(
+                ctx.channel.name, reply, trigger_type="command", command="alias"
+            )
             return await ctx.reply(reply)
 
         if username in core.aliases:
@@ -103,8 +113,16 @@ class FaebotCommands:
     @commands.command()
     @requires_mod
     async def clear(self, ctx: commands.Context):
-        """Clear faebot's memory."""
-        core.conversations[ctx.channel.name].chatlog = []
+        """Clear faebot's memory of this room. Her window is read back from
+        the record on waking, so a silent clear would be undone by the next
+        restart: the clear is recorded as the machinery's line and the
+        read-back treats it as the floor — nothing before it comes back."""
+        when = datetime.datetime.now(datetime.UTC).strftime("%H:%M UTC")
+        line = core.machinery_line(
+            f"faebot's memory of this room was cleared by a mod at {when}"
+        )
+        core.conversations[ctx.channel.name].chatlog = [line]
+        capture.record_clear(ctx.channel.name, line, by=ctx.message.author.name)
         return await ctx.reply("message history has been cleared. faebot has forgotten")
 
     @commands.command()

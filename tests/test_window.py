@@ -146,18 +146,6 @@ class TestReadBack:
         assert lines == ["a: last week"]
         assert last["content"] == "last week" and last_line is last
 
-    def test_a_cleared_memory_is_the_floor(self, record):
-        cleared = core.machinery_line(
-            "faebot's memory of this room was cleared by a mod at 02:00 UTC"
-        )
-        record(
-            row("chat", 20, author="a", content="before"),
-            row("clear", 10, line=cleared, by="mod"),
-            row("chat", 5, author="a", content="after"),
-        )
-        lines, _, _ = window.read_back("testchannel", 50, NOW)
-        assert lines == [cleared, "a: after"]
-
     def test_the_clock_is_her_last_window_line_not_the_records_last_row(self, record):
         record(
             row("chat", 30, author="a", content="hi"),

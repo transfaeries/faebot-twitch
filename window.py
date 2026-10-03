@@ -52,7 +52,7 @@ def window_line(event: dict) -> str | None:
         return f"faebot: {event.get('text') or ''}"
     if kind == "faebot_pass":
         return core.machinery_line(core.PASS_MARK)
-    if kind in ("stream_state", "wake", "restart", "clear"):
+    if kind in ("stream_state", "wake", "restart"):
         # The machinery's own lines, kept verbatim in the record.
         return event.get("line") or None
     return None
@@ -89,8 +89,7 @@ def read_back(
     (oldest first); the newest row about the channel of ANY kind — the
     wake's witness to whether the stop was chosen; and the newest row that
     was a line in her window — the seam's clock. Walks back a day at a time
-    until the window is full or the record runs out, a cleared memory
-    (`clear`) being the floor: nothing before it comes back."""
+    until the window is full or the record runs out."""
     now = now or datetime.datetime.now(datetime.UTC)
     lines: list[str] = []
     last: dict | None = None
@@ -101,15 +100,6 @@ def read_back(
         if last is None and rows:
             last = rows[-1]
         for event in reversed(rows):
-            if event.get("kind") == "clear":
-                lines.append(
-                    event.get("line")
-                    or core.machinery_line("the memory was cleared here")
-                )
-                if last_line is None:
-                    last_line = event
-                lines.reverse()
-                return lines, last, last_line
             line = window_line(event)
             if line is None:
                 continue

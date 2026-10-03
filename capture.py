@@ -219,18 +219,6 @@ def record_wake(channel_name: str, line: str, **meta) -> None:
         logging.debug(f"capture_wake failed: {type(error).__name__}: {error}")
 
 
-def record_clear(channel_name: str, line: str, **meta) -> None:
-    """Record a mod clearing faebot's memory of a room — the machinery's
-    line, which the read-back takes as its floor: nothing before it comes
-    back on waking, so a cleared memory stays cleared across a restart."""
-    if not is_enabled():
-        return
-    try:
-        record("clear", channel=channel_name, line=line, **meta)
-    except Exception as error:
-        logging.debug(f"capture_clear failed: {type(error).__name__}: {error}")
-
-
 def record_restart(channel_name: str, line: str, **meta) -> None:
     """Record a CHOSEN stop: the machinery told faebot a restart was coming
     (`line`), and `meta` says what came of it — her own goodnight said (`how`

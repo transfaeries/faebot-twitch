@@ -19,44 +19,40 @@ class TestRequiresMod:
         """Moderators should be able to use mod-only commands."""
         from commands import FaebotCommands
 
-        ctx = mock_context("fae;clear", is_mod=True)
+        ctx = mock_context("fae;silence", is_mod=True)
         core.ensure_conversation("testchannel")
 
         instance = FaebotCommands()
         # Call the callback directly, bypassing TwitchIO Command machinery
-        await instance.clear._callback(instance, ctx)
+        await instance.silence._callback(instance, ctx)
 
-        assert (
-            "cleared" in ctx.replies[0].lower() or "forgotten" in ctx.replies[0].lower()
-        )
+        assert "quiet" in ctx.sends[0].lower()
 
     @pytest.mark.asyncio
     async def test_admin_can_use_command(self, mock_context):
         """Users in ADMIN list should be able to use mod-only commands."""
         from commands import FaebotCommands
 
-        ctx = mock_context("fae;clear", author_name="transfaeries", is_mod=False)
+        ctx = mock_context("fae;silence", author_name="transfaeries", is_mod=False)
         core.ensure_conversation("testchannel")
 
         with patch("commands.ADMIN", ["transfaeries"]):
             instance = FaebotCommands()
-            await instance.clear._callback(instance, ctx)
+            await instance.silence._callback(instance, ctx)
 
-        assert (
-            "cleared" in ctx.replies[0].lower() or "forgotten" in ctx.replies[0].lower()
-        )
+        assert "quiet" in ctx.sends[0].lower()
 
     @pytest.mark.asyncio
     async def test_regular_user_blocked(self, mock_context):
         """Regular users should be blocked from mod-only commands."""
         from commands import FaebotCommands
 
-        ctx = mock_context("fae;clear", author_name="randomuser", is_mod=False)
+        ctx = mock_context("fae;silence", author_name="randomuser", is_mod=False)
         core.ensure_conversation("testchannel")
 
         with patch("commands.ADMIN", []):
             instance = FaebotCommands()
-            await instance.clear._callback(instance, ctx)
+            await instance.silence._callback(instance, ctx)
 
         assert "mod" in ctx.sends[0].lower() or "admin" in ctx.sends[0].lower()
 
@@ -197,21 +193,6 @@ class TestAliasCommand:
 
 
 class TestModCommands:
-    @pytest.mark.asyncio
-    async def test_clear_empties_chatlog(self, mock_context):
-        """clear command should empty the channel's chatlog."""
-        from commands import FaebotCommands
-
-        ctx = mock_context("fae;clear", is_mod=True)
-        conv = core.ensure_conversation("testchannel")
-        conv.chatlog = ["msg1", "msg2", "msg3"]
-
-        instance = FaebotCommands()
-        await instance.clear._callback(instance, ctx)
-
-        # not empty: the clear leaves the machinery's own line as the floor
-        assert len(conv.chatlog) == 1 and conv.chatlog[0].startswith(core.MACHINERY)
-
     @pytest.mark.asyncio
     async def test_freq_check_current(self, mock_context):
         """freq with no args should show current frequencies."""
@@ -428,28 +409,10 @@ class TestAdminCommands:
         assert conv.model == "anthropic/claude-3-haiku"
 
 
-# ── the window is one store: clear and alias leave their mark (cut C) ──
+# ── the window is one store: alias leaves its mark (cut C) ──
 
 
 class TestWindowMirror:
-    @pytest.mark.asyncio
-    async def test_clear_leaves_the_machinerys_line_and_a_row(self, mock_context):
-        """A cleared memory is the read-back's floor — so the clear itself
-        must be in the record, or the next wake would undo it."""
-        from commands import FaebotCommands
-        from unittest.mock import patch
-
-        ctx = mock_context("fae;clear", is_mod=True, author_name="themod")
-        conversation = core.ensure_conversation("testchannel")
-        conversation.chatlog = ["a: hi", "faebot: hello"]
-        instance = FaebotCommands()
-        with patch("commands.capture.record_clear") as record_clear:
-            await instance.clear._callback(instance, ctx)
-        assert len(conversation.chatlog) == 1
-        line = conversation.chatlog[0]
-        assert line.startswith(core.MACHINERY) and "cleared by a mod" in line
-        record_clear.assert_called_once_with("testchannel", line, by="themod")
-
     @pytest.mark.asyncio
     async def test_alias_reply_is_recorded_as_her_line(self, mock_context):
         from commands import FaebotCommands

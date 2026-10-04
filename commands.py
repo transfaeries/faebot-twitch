@@ -6,7 +6,6 @@ Faebot inherits from this class to gain all fb;/fae; commands.
 from twitchio.ext import commands
 from functools import wraps
 from typing import Awaitable, Callable
-import datetime
 import os
 import logging
 
@@ -65,7 +64,7 @@ class FaebotCommands:
         """Display the mods command message."""
         await ctx.reply(
             "Here are the commands mods can use with faebot. | fae;freq to set the frequency of responses. | fae;hist to set message history length.| "
-            "fae;silence to silence faebot entirely. | fae;clear to clear faebot's memory. | fae;part to have faebot leave the channel."
+            "fae;silence to silence faebot entirely. | fae;part to have faebot leave the channel."
         )
 
     @commands.command()
@@ -109,21 +108,6 @@ class FaebotCommands:
             )
 
     # --- commands for mods ---
-
-    @commands.command()
-    @requires_mod
-    async def clear(self, ctx: commands.Context):
-        """Clear faebot's memory of this room. Her window is read back from
-        the record on waking, so a silent clear would be undone by the next
-        restart: the clear is recorded as the machinery's line and the
-        read-back treats it as the floor — nothing before it comes back."""
-        when = datetime.datetime.now(datetime.UTC).strftime("%H:%M UTC")
-        line = core.machinery_line(
-            f"faebot's memory of this room was cleared by a mod at {when}"
-        )
-        core.conversations[ctx.channel.name].chatlog = [line]
-        capture.record_clear(ctx.channel.name, line, by=ctx.message.author.name)
-        return await ctx.reply("message history has been cleared. faebot has forgotten")
 
     @commands.command()
     @requires_mod

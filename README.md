@@ -64,9 +64,8 @@ Environment for the wire: `BODY_URL` (the ear's target, default `http://127.0.0.
 | `fae;freq [chat] [voice]` | Check or set reply frequency (0-1) |
 | `fae;hist [n]` | Check or set conversation history length |
 | `fae;silence` | Toggle faebot's ability to speak |
-| `fae;clear` | Clear faebot's conversation memory |
 | `fae;part` | Ask faebot to leave the channel |
-| `fae;;prompt` | Info about the system prompt |
+| `fae;prompt` | Info about the system prompt |
 
 ### Admin
 | Command | Description |

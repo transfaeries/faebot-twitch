@@ -146,6 +146,22 @@ class TestReadBack:
         assert lines == ["a: last week"]
         assert last["content"] == "last week" and last_line is last
 
+    def test_her_goodnights_echo_is_not_the_witness(self, record):
+        """The 10-05 redeploy: she said goodnight, the restart row landed,
+        and IRC echoed her goodnight back a millisecond later. The echo is
+        not an event of its own, so the restart row stays the witness and
+        the wake names the stop as chosen."""
+        record(
+            row("faebot_message", 3, text="night night chat"),
+            row("restart", 3, line="…", how="said"),
+            row("chat", 3, echo=True, author=None, content="night night chat"),
+        )
+        lines, last, last_line = window.read_back("testchannel", 50, NOW)
+        assert last["kind"] == "restart"
+        assert lines == ["faebot: night night chat", "…"]
+        seam, chosen = window.seam(len(lines), last, NOW, last_line)
+        assert chosen is True and "a chosen restart" in seam
+
     def test_the_clock_is_her_last_window_line_not_the_records_last_row(self, record):
         record(
             row("chat", 30, author="a", content="hi"),

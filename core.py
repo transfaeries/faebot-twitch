@@ -184,8 +184,8 @@ def history_floor(history: int) -> int:
     """How far the chatlog is cut back once it overflows `history`.
 
     Trimming to exactly the limit shifts the prompt's prefix by one line on
-    every call, so the provider's prompt cache never holds past the system
-    prompt. Dropping a fifth at a time keeps the prefix stable for many calls;
+    every call, so the provider's prompt cache never holds past the desk's
+    furniture. Dropping a fifth at a time keeps the prefix stable for many calls;
     faebot remembers between the floor and the limit.
     """
     return history - history // 5

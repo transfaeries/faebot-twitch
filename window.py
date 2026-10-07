@@ -58,6 +58,14 @@ def window_line(event: dict) -> str | None:
     return None
 
 
+def _is_her_echo(event: dict) -> bool:
+    """IRC echoing her own line back. Not an event of its own — the
+    send-point row already carries the line — so it is never the wake's
+    witness: her goodnight's echo lands a millisecond after the `restart`
+    row, and a witness that counted it would call a chosen stop unchosen."""
+    return event.get("kind") == "chat" and bool(event.get("echo"))
+
+
 def _rows(path: str, channel: str) -> list[dict]:
     """Every row of one capture file about this channel, in file order.
     A row that fails to parse is skipped: the record is append-only and a
@@ -86,8 +94,8 @@ def read_back(
     channel: str, depth: int, now: datetime.datetime | None = None
 ) -> tuple[list[str], dict | None, dict | None]:
     """The last `depth` window lines about `channel` from the record
-    (oldest first); the newest row about the channel of ANY kind — the
-    wake's witness to whether the stop was chosen; and the newest row that
+    (oldest first); the newest row about the channel of any kind but her
+    own echo — the wake's witness to whether the stop was chosen; and the newest row that
     was a line in her window — the seam's clock. Walks back a day at a time
     until the window is full or the record runs out."""
     now = now or datetime.datetime.now(datetime.UTC)
@@ -97,8 +105,10 @@ def read_back(
     for days_ago in range(DAYS_BACK + 1):
         day = now - datetime.timedelta(days=days_ago)
         rows = _rows(capture.path_for(day), channel)
-        if last is None and rows:
-            last = rows[-1]
+        if last is None:
+            last = next(
+                (event for event in reversed(rows) if not _is_her_echo(event)), None
+            )
         for event in reversed(rows):
             line = window_line(event)
             if line is None:

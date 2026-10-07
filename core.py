@@ -147,18 +147,16 @@ LINE_SHAPE = "your messages here are one line, up to 500 characters"
 
 def stream_line(stream_title: str, game_name: str, live: bool | None) -> str:
     """The stream's state as the body knows it (stream.py), None before the
-    first poll — then the channel's standing title and game, state unread."""
-    if live is True:
-        return f'the stream is live — "{stream_title}", playing {game_name}'
-    if live is False:
+    first poll — then the channel's standing title and game, state unread.
+    Worded as the window's own stamp words it (stream.describe), so the seam
+    never says one fact two ways."""
+    if live is None:
         return (
-            f'the stream is offline — its standing title "{stream_title}", '
-            f"game {game_name}"
+            "the stream's state hasn't been read yet — the channel's standing "
+            f'title "{stream_title}", game {game_name}'
         )
-    return (
-        "the stream's state hasn't been read yet — the channel's standing title "
-        f'"{stream_title}", game {game_name}'
-    )
+    where = "live" if live else "offline"
+    return f'the stream is {where} — title "{stream_title}", game {game_name}'
 
 
 # The mark coming back whole as her answer is the pass she meant, the same
@@ -540,15 +538,30 @@ async def generate_response(
     # sitting sends the desk as one message, "so twitch does the same and
     # the old system message goes"). A desk that will not lay raises, and
     # the body records the error — never a silence that looks chosen.
-    desk = lay_desk(
-        conversation,
-        channel_name,
-        stream_title,
-        game_name,
-        emotes,
-        live=live,
-        called=called,
-    )
+    if generation_id is None:
+        generation_id = str(uuid.uuid4())
+    try:
+        desk = lay_desk(
+            conversation,
+            channel_name,
+            stream_title,
+            game_name,
+            emotes,
+            live=live,
+            called=called,
+        )
+    except Exception as error:
+        # the dashboard sees the failure too, not only the capture
+        put_event(
+            events,
+            {
+                "type": "error",
+                "id": generation_id,
+                "channel": channel_name,
+                "error": f"the desk would not lay: {type(error).__name__}: {error}",
+            },
+        )
+        raise
     prompt = desk + "faebot:"
     logging.debug(f"model: {conversation.model}\nprompt: \n{prompt}")
 
@@ -561,8 +574,6 @@ async def generate_response(
     )
     permalog(f"generating with parameters: {params}\n")
 
-    if generation_id is None:
-        generation_id = str(uuid.uuid4())
     trigger_text = conversation.chatlog[-1] if conversation.chatlog else ""
 
     put_event(

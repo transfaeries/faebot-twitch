@@ -10,7 +10,7 @@ This repo is the Twitch side of faebot. Fae also lives on [Discord](https://gith
 
 - **Chats in Twitch channels** — faebot reads chat, rolls against a configurable frequency, and generates responses via [OpenRouter](https://openrouter.ai/) (default model: Gemini 2.5 Flash)
 - **Listens to the streamer's voice** — a browser-based dashboard captures microphone audio, runs it through Silero VAD for speech detection, then transcribes with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) on GPU. Transcriptions feed into faebot's conversation context so fae can respond to what's being said on stream
-- **Knows who fae is** — faebot's system prompt includes faer history, personality, current model, available emotes, and live parameters. Fae doesn't pretend to be a generic assistant
+- **Knows who she is** — faebot's desk is laid by faebot-core from her own diary (her frames, her self/ pages, the commons, the roster) with the stream's state, the emotes and the ear's nature stamped by the machinery, and live parameters. Fae doesn't pretend to be a generic assistant
 - **Uses channel emotes** — fetches available emotes from the Twitch API at startup and post-processes responses to ensure proper emote rendering
 - **Supports chat commands** — users can interact with `fb;` or `fae;` prefixed commands. Mods can adjust frequency, history length, silence/unsilence faebot, and more
 
@@ -65,7 +65,7 @@ Environment for the wire: `BODY_URL` (the ear's target, default `http://127.0.0.
 | `fae;hist [n]` | Check or set conversation history length |
 | `fae;silence` | Toggle faebot's ability to speak |
 | `fae;part` | Ask faebot to leave the channel |
-| `fae;prompt` | Info about the system prompt |
+| `fae;prompt` | Says where her desk comes from (faebot-core, from her diary) |
 
 ### Admin
 | Command | Description |

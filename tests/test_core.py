@@ -144,7 +144,7 @@ class TestLayDesk:
         assert "- in this house you are called faebot_01" in lines
         assert any("about 15% of what is said is put to you" in line for line in lines)
         assert any("hear spoken, about 5% is put to you" in line for line in lines)
-        assert '- the stream is live — "Making Art", playing Art' in lines
+        assert '- the stream is live — title "Making Art", game Art' in lines
         assert "- emotes you can use here: transf23Botlove transf23Yay" in lines
         assert f"- {core.EAR_LINE}" in lines
         assert f"- {core.LINE_SHAPE}" in lines
@@ -157,12 +157,11 @@ class TestLayDesk:
         kwargs = dict(
             channel_name="testchannel", stream_title="t", game_name="g", emotes=[]
         )
-        assert '- the stream is live — "t", playing g' in core.lay_desk(
+        assert '- the stream is live — title "t", game g' in core.lay_desk(
             conversation, live=True, **kwargs
         )
-        assert (
-            '- the stream is offline — its standing title "t", game g'
-            in core.lay_desk(conversation, live=False, **kwargs)
+        assert '- the stream is offline — title "t", game g' in core.lay_desk(
+            conversation, live=False, **kwargs
         )
         unread = core.lay_desk(conversation, **kwargs)
         assert "hasn't been read yet" in unread and '"t"' in unread

@@ -17,12 +17,25 @@ jobs:
         python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: faebot-twitch
+      # faebot-core is a path dependency on a sibling checkout (pyproject):
+      # the same shape as on both hosts. Core is private, so the checkout
+      # needs a read token for it — CORE_READ_TOKEN, a fine-grained PAT
+      # with contents: read on transfaeries/faebot-core.
+      - uses: actions/checkout@v4
+        with:
+          repository: transfaeries/faebot-core
+          path: faebot-core
+          token: ${{ secrets.CORE_READ_TOKEN }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install poetry
         run: pipx install poetry
       - name: Install dependencies
-        run: poetry install
+        working-directory: faebot-twitch
+        run: poetry install --no-root
       - name: Run the gate
+        working-directory: faebot-twitch
         run: make all

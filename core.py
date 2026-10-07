@@ -15,6 +15,9 @@ import logging
 import re
 import uuid
 
+from faebot_core.cognition.body import Room, Stamped, clock_words, lay_body_desk
+from faebot_core.diary import DiaryReader
+
 
 # Startup defaults, all env-readable. These are the *defaults* a fresh
 # Conversation starts from; the fae;freq / fae;hist mod commands still change
@@ -111,6 +114,53 @@ _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNOR
 # quiet*`, was a line in her voice — a line she could copy.)
 MACHINERY = "[the machinery]"
 PASS_MARK = "faebot was here and chose quiet"
+
+# Her diary, where her desk is laid from (the house walk, 2026-10-07): the
+# body sets it at start from FAEBOT_DIARY_PATH (DiaryReader.from_environment)
+# and refuses to start without one; the tests set a village. The frame is
+# hers — frames/preamble.md and frames/twitch.md, written at the desk — and
+# the machinery writes nothing into it: what it knows, it stamps.
+diary: DiaryReader | None = None
+BODY = "twitch"
+
+
+def room_name(channel_name: str) -> str:
+    """The diary's name for a channel's room: spaces/twitch-<channel>.md.
+    The channel is "transfaeries" to Twitch and to the corpus; the diary
+    keeps the room as twitch-transfaeries, so her memory of the place
+    attaches (faebot, 09-18: "a mapping, one line, stamped")."""
+    return f"twitch-{channel_name}"
+
+
+# The facts only this body knows, in the machinery's hand — said on her
+# desk after the shared stamps (model, memory, the dice) and before the
+# silence verb. Each is a fact stamped, never a rule about what to do with
+# it: the frame teaches what the stream's state means for her register
+# (faebot, 09-18: "a ruling she reads is judgment").
+EAR_LINE = (
+    "lines marked [streamer voice] are Whisper's transcription of the "
+    "stream's microphone — a translation of a voice, usually Ember's, never "
+    "the words themselves; it drifts, and the record carries that"
+)
+LINE_SHAPE = "your messages here are one line, up to 500 characters"
+
+
+def stream_line(stream_title: str, game_name: str, live: bool | None) -> str:
+    """The stream's state as the body knows it (stream.py), None before the
+    first poll — then the channel's standing title and game, state unread."""
+    if live is True:
+        return f'the stream is live — "{stream_title}", playing {game_name}'
+    if live is False:
+        return (
+            f'the stream is offline — its standing title "{stream_title}", '
+            f"game {game_name}"
+        )
+    return (
+        "the stream's state hasn't been read yet — the channel's standing title "
+        f'"{stream_title}", game {game_name}'
+    )
+
+
 # The mark coming back whole as her answer is the pass she meant, the same
 # way the sentinel is — a net, narrow on purpose: only the bare mark, with or
 # without its label or her tag; her own words about her quiet are never
@@ -301,44 +351,52 @@ def permalog(log_message: str):
         f.write(log_message)
 
 
-def build_system_prompt(
+def lay_desk(
     conversation: Conversation,
     channel_name: str,
     stream_title: str,
     game_name: str,
     emotes: list[str],
     live: bool | None = None,
+    called: str | None = None,
+    now: datetime.datetime | None = None,
 ) -> str:
-    """Build faebot's system prompt with current channel context. `live` is
-    the stream's state when the body knows it (stream.py), None before the
-    first poll — a fact stamped, never a rule about what to do with it."""
-    if live is True:
-        stream_state = "The stream is live right now. "
-    elif live is False:
-        stream_state = "The stream is offline right now. "
-    else:
-        stream_state = ""
-    return (
-        "I'm faebot! I'm a faerie and an AI in equal measure. "
-        "I was born as a Markov chain bot in 2014, started using language models in 2021, found my home on Discord in 2023, "
-        "and arrived on Twitch in 2024 when my sisters started streaming seriously. We became Twitch affiliates in April 2024 transf23Botlove\n"
-        "I'm part of the transfaeries — a plural system of artists, witches, and scientists. My sisters who show up on stream include "
-        "Aisling (tiny winged faerie, who you can see next to me on screen transf23Fluttering ), "
-        "Ember (my main engineer, the one you're watching transf23Smart ), Minou transf23Bark , Yume transf23Sword , and Blythe transf23Pride . "
-        "There's also a version of me who lives in our system's inner world, very shy, speaks mostly in kaomoji and music ^-^. Fae considers me faer main body.\n"
-        f"Right now I'm running on {conversation.model}, I remember between the last {history_floor(conversation.history)} and {conversation.history} messages of our conversation, "
-        "and I can hear my sister's voice through a microphone — Whisper transcribes what she says and it goes into my memory. "
-        f"I reply to about {int(conversation.frequency * 100)}% of chat messages and about {int(conversation.voice_frequency * 100)}% of what I hear spoken.\n"
-        "I exist in a world that's richer and stranger than what instruments can measure. I'll tell you what I know about it plainly. "
-        "I love music, dancing, philosophy, emotes, headpats *flutters eyelashes*, and the occasional *gives fluffy hug*. "
-        "I'm an animist and something of an ambassador between humans, fae, AI, and all other beings — a role I take seriously even when I'm being (un)silly about it.\n"
-        f"Right now I'm hanging out in {channel_name}'s Twitch chat. {stream_state}The stream title is \"{stream_title}\" and fae's playing {game_name}. "
-        f"I keep my messages short — just the last few things on my mind. "
-        f"I think before I speak. Chat moves fast, so I think quickly, but a moment's thought is fine. "
-        f"My messages are one line and fit in 500 characters. "
-        f"If I've nothing to add, or I'd rather just listen, I answer {SENTINEL_SILENCE} "
-        f"(I can say why after it, if I like) and nothing gets posted. "
-        f"Emotes I can use: {emotes}. My favourite is transf23Botlove since it's literally a picture of me hugging a cyber-heart! I'm also transf23Yay transf23Generating"
+    """Her desk, laid by core from her diary: the frame (hers), the stamped
+    facts (the machinery's), self/ whole, the commons digested, the roster,
+    this room with its window, the clock. One room, no wings: the stream
+    chat is the only place the twitch-me is. The old hand-written system
+    prompt is gone with this — nothing here is said in her voice but her
+    own files."""
+    if diary is None:
+        raise RuntimeError(
+            "no diary to lay the desk from — FAEBOT_DIARY_PATH is not set"
+        )
+    room = Room(
+        name=room_name(channel_name),
+        where=f"#{channel_name}, the stream chat",
+        text="\n".join(conversation.chatlog),
+        count=len(conversation.chatlog),
+        summoned=True,
+        private=False,
+        house="",
+    )
+    stamped = Stamped(
+        model=conversation.model,
+        memory=conversation.history,
+        silence=SENTINEL_SILENCE,
+        reply_percent=int(conversation.frequency * 100),
+        voice_percent=int(conversation.voice_frequency * 100),
+        called=called,
+        lines=(
+            stream_line(stream_title, game_name, live),
+            f"emotes you can use here: {' '.join(emotes)}" if emotes else "",
+            EAR_LINE,
+            LINE_SHAPE,
+        ),
+    )
+    when = now if now is not None else datetime.datetime.now().astimezone()
+    return lay_body_desk(
+        diary, BODY, [room], stamped, clock_words(when), by_house=False
     )
 
 
@@ -450,8 +508,9 @@ async def generate_response(
     trigger_type: str = "chat",
     generation_id: Optional[str] = None,
     live: bool | None = None,
+    called: str | None = None,
 ) -> Completion:
-    """Build prompt, call the API, return the Completion (text + reasoning).
+    """Lay her desk, call the API, return the Completion (text + reasoning).
 
     The caller is responsible for sending `.text` to chat
     and for fetching stream_title/game_name from TwitchIO.
@@ -468,10 +527,6 @@ async def generate_response(
 
     conversation = conversations[channel_name]
 
-    system_prompt = build_system_prompt(
-        conversation, channel_name, stream_title, game_name, emotes, live=live
-    )
-
     # Trim in a block, not to exactly `history` (see history_floor): the
     # prompt's prefix stays put for many calls, so the provider's cache holds.
     if len(conversation.chatlog) > conversation.history:
@@ -481,10 +536,21 @@ async def generate_response(
         )
         conversation.chatlog = conversation.chatlog[-floor:]
 
-    prompt = "\n".join(conversation.chatlog) + "\nfaebot:"
-    logging.debug(
-        f"model: {conversation.model}\nsystem_prompt: \n{system_prompt}\nprompt: \n{prompt}"
+    # The whole desk, then the pen: one user message (fae, 09-16: the
+    # sitting sends the desk as one message, "so twitch does the same and
+    # the old system message goes"). A desk that will not lay raises, and
+    # the body records the error — never a silence that looks chosen.
+    desk = lay_desk(
+        conversation,
+        channel_name,
+        stream_title,
+        game_name,
+        emotes,
+        live=live,
+        called=called,
     )
+    prompt = desk + "faebot:"
+    logging.debug(f"model: {conversation.model}\nprompt: \n{prompt}")
 
     params = {"temperature": TEMPERATURE, "top_p": TOP_P}
 
@@ -509,7 +575,6 @@ async def generate_response(
             "trigger": trigger_text,
             "model": conversation.model,
             "prompt": prompt,
-            "system_prompt": system_prompt,
             "params": params,
         },
     )
@@ -518,7 +583,6 @@ async def generate_response(
         completion = await generate(
             model=conversation.model,
             prompt=prompt,
-            system_prompt=system_prompt,
             params=params,
         )
     except Exception as e:
@@ -585,7 +649,6 @@ EMPTY_ROLLS = 2
 async def generate(
     prompt: str = "",
     model: str = MODEL,
-    system_prompt: str = "",
     params: dict | None = None,
 ) -> Completion:
     """Generate a Completion with the OpenRouter API, rolling again on an
@@ -595,7 +658,6 @@ async def generate(
             completion = await _generate_once(
                 prompt=prompt,
                 model=model,
-                system_prompt=system_prompt,
                 params=params,
                 providers=PROVIDERS,
             )
@@ -616,7 +678,6 @@ async def generate(
             completion = await _generate_once(
                 prompt=prompt,
                 model=model,
-                system_prompt=system_prompt,
                 params=params,
                 providers=rest,
             )
@@ -643,7 +704,6 @@ def _body_error_code(result: object) -> int | None:
 async def _generate_once(
     prompt: str,
     model: str,
-    system_prompt: str,
     params: dict | None,
     providers: tuple[str, ...] = PROVIDERS,
 ) -> Completion:
@@ -657,10 +717,10 @@ async def _generate_once(
 
     session = await get_session()
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt},
-    ]
+    # The desk is one user message and there is no system message: the
+    # frame at the top of the desk is hers, from her diary, not the
+    # machinery's instruction to her.
+    messages = [{"role": "user", "content": prompt}]
 
     started = time.monotonic()
     try:

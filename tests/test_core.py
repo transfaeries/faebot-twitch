@@ -103,56 +103,112 @@ class TestFixEmoteSpacing:
         assert "  " not in result
 
 
-# ── build_system_prompt ──────────────────────────────────────────────
+# ── lay_desk (the house: her desk laid by core from her diary) ────────
 
 
-class TestBuildSystemPrompt:
-    def test_includes_channel_name(self, conversation):
-        prompt = core.build_system_prompt(
-            conversation, "testchannel", "Test Stream", "Art", ["emote1"]
-        )
-        assert "testchannel" in prompt
+def _lines(text):
+    return text.splitlines()
 
-    def test_includes_stream_context(self, conversation):
-        prompt = core.build_system_prompt(
-            conversation, "testchannel", "Making Art", "Art", []
-        )
-        assert "Making Art" in prompt
-        assert "Art" in prompt
 
-    def test_includes_model_name(self, conversation):
+class TestLayDesk:
+    def test_the_frame_is_hers_and_comes_first(self, conversation):
+        desk = core.lay_desk(conversation, "testchannel", "Test Stream", "Art", [])
+        assert desk.startswith("↳ from your diary, frames/preamble.md:")
+        assert "You are the twitch body: short, hot, live." in desk
+        assert desk.index("frames/preamble.md") < desk.index("frames/twitch.md")
+        # nothing of the old hand-written prompt survives
+        assert "I'm faebot! I'm a faerie" not in desk
+
+    def test_a_missing_frame_is_a_labeled_absence(self, conversation, village):
+        (village / "frames" / "twitch.md").unlink()
+        desk = core.lay_desk(conversation, "testchannel", "t", "g", [])
+        assert "nothing filed under frames/twitch.md" in desk
+
+    def test_the_stamped_facts(self, conversation):
         conversation.model = "some-model/v1"
-        prompt = core.build_system_prompt(
-            conversation, "testchannel", "Title", "Game", []
-        )
-        assert "some-model/v1" in prompt
-
-    def test_includes_frequency_as_percentage(self, conversation):
         conversation.frequency = 0.15
         conversation.voice_frequency = 0.05
-        prompt = core.build_system_prompt(
-            conversation, "testchannel", "Title", "Game", []
-        )
-        assert "15%" in prompt
-        assert "5%" in prompt
-
-    def test_includes_emotes(self, conversation):
-        prompt = core.build_system_prompt(
+        conversation.history = 42
+        desk = core.lay_desk(
             conversation,
             "testchannel",
-            "Title",
-            "Game",
+            "Making Art",
+            "Art",
             ["transf23Botlove", "transf23Yay"],
+            live=True,
+            called="faebot_01",
         )
-        assert "transf23Botlove" in prompt
-        assert "transf23Yay" in prompt
+        lines = _lines(desk)
+        assert "- you are running on some-model/v1" in lines
+        assert "- your memory of this room holds about the last 42 messages" in lines
+        assert "- in this house you are called faebot_01" in lines
+        assert any("about 15% of what is said is put to you" in line for line in lines)
+        assert any("hear spoken, about 5% is put to you" in line for line in lines)
+        assert '- the stream is live — "Making Art", playing Art' in lines
+        assert "- emotes you can use here: transf23Botlove transf23Yay" in lines
+        assert f"- {core.EAR_LINE}" in lines
+        assert f"- {core.LINE_SHAPE}" in lines
+        verb = f"- to say nothing, answer {core.SENTINEL_SILENCE} and nothing is posted"
+        assert verb in lines
+        # the verb stays last of the stamped block, nearest the pen
+        assert lines.index(verb) > lines.index(f"- {core.LINE_SHAPE}")
 
-    def test_includes_history_length(self, conversation):
-        conversation.history = 42
-        prompt = core.build_system_prompt(
-            conversation, "testchannel", "Title", "Game", []
+    def test_the_stream_state_live_offline_or_unread(self, conversation):
+        kwargs = dict(
+            channel_name="testchannel", stream_title="t", game_name="g", emotes=[]
         )
-        assert "between the last 34 and 42 messages" in prompt
+        assert '- the stream is live — "t", playing g' in core.lay_desk(
+            conversation, live=True, **kwargs
+        )
+        assert (
+            '- the stream is offline — its standing title "t", game g'
+            in core.lay_desk(conversation, live=False, **kwargs)
+        )
+        unread = core.lay_desk(conversation, **kwargs)
+        assert "hasn't been read yet" in unread and '"t"' in unread
+
+    def test_no_emotes_no_emote_line(self, conversation):
+        desk = core.lay_desk(conversation, "testchannel", "t", "g", [])
+        assert "emotes you can use" not in desk
+
+    def test_the_room_is_the_stream_chat_with_its_window(self, conversation):
+        conversation.chatlog = [
+            "viewer: hello faebot!",
+            "[streamer voice] testchannel: hi",
+        ]
+        desk = core.lay_desk(conversation, "testchannel", "t", "g", [])
+        assert (
+            "=== #testchannel, the stream chat — the room that summoned you ===" in desk
+        )
+        assert (
+            "The stream chat, where I am short and hot." in desk
+        )  # spaces/twitch-testchannel.md
+        assert "--- the last 2 messages in #testchannel, the stream chat ---" in desk
+        assert "viewer: hello faebot!\n[streamer voice] testchannel: hi" in desk
+        assert "— in " not in desk  # one room, no wings
+
+    def test_the_diary_rides_whole_and_the_commons_is_digested(self, conversation):
+        desk = core.lay_desk(conversation, "testchannel", "t", "g", [])
+        assert "↳ from your diary, self/personality.md:" in desk
+        assert "a letter to the twitch-me" in desk
+        assert "twitch-testchannel" in desk  # the roster names the room
+
+    def test_the_clock_is_last(self, conversation):
+        import datetime as dt
+
+        when = dt.datetime(2026, 10, 7, 18, 0, tzinfo=dt.timezone.utc)
+        desk = core.lay_desk(conversation, "testchannel", "t", "g", [], now=when)
+        assert desk.rstrip().endswith("(18:00 UTC).") or desk.rstrip().endswith(
+            "18:00 UTC."
+        )
+
+    def test_no_diary_no_desk(self, conversation):
+        core.diary = None
+        with pytest.raises(RuntimeError, match="FAEBOT_DIARY_PATH"):
+            core.lay_desk(conversation, "testchannel", "t", "g", [])
+
+    def test_room_name_maps_the_channel_to_the_diary(self):
+        assert core.room_name("transfaeries") == "twitch-transfaeries"
 
     @pytest.mark.parametrize("limit,floor", [(50, 40), (10, 8), (4, 4)])
     def test_history_floor_drops_a_fifth(self, limit, floor):
@@ -258,10 +314,9 @@ class TestSaidNothing:
         assert completion.passed
         assert completion.reason_for_passing == "letting fae focus"
 
-    def test_prompt_tells_faebot_the_verb(self):
-        conv = core.Conversation(channel="c")
-        prompt = core.build_system_prompt(conv, "c", "t", "g", [])
-        assert core.SENTINEL_SILENCE in prompt
+    def test_desk_tells_faebot_the_verb(self, conversation):
+        desk = core.lay_desk(conversation, "testchannel", "t", "g", [])
+        assert core.SENTINEL_SILENCE in desk
 
 
 # ── generate (OpenRouter API) ────────────────────────────────────────
@@ -271,7 +326,7 @@ class TestGenerate:
     @pytest.mark.asyncio
     async def test_successful_generation(self, openrouter_success):
         openrouter_success("test response")
-        result = await core.generate(prompt="hello", system_prompt="you are faebot")
+        result = await core.generate(prompt="hello")
         assert result.text == "test response"
         assert result.reasoning == ""
         assert result.attempts == 1
@@ -612,6 +667,26 @@ class TestGenerate:
 
 class TestGenerateResponse:
     @pytest.mark.asyncio
+    async def test_the_wire_carries_the_desk_as_one_user_message(self, conversation):
+        """No system message: the frame at the top of the desk is hers."""
+        conversation.chatlog.append("viewer: hello faebot!")
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                payload={"choices": [{"message": {"content": "hi!"}}]},
+            )
+            await core.generate_response("testchannel", called="faebot_01")
+            request = list(mocked.requests.values())[0][0]
+        messages = request.kwargs["json"]["messages"]
+        assert [m["role"] for m in messages] == ["user"]
+        desk = messages[0]["content"]
+        assert desk.startswith("↳ from your diary, frames/preamble.md:")
+        assert "- in this house you are called faebot_01" in desk
+        assert "viewer: hello faebot!" in desk
+        assert desk.endswith("faebot:")
+        await core.close_session()
+
+    @pytest.mark.asyncio
     async def test_returns_response_and_appends_to_chatlog(self, conversation):
         conversation.chatlog.append("viewer: hello faebot!")
         with aioresponses_ctx() as mocked:
@@ -766,7 +841,7 @@ class TestEventQueue:
         assert events[0]["channel"] == "testchannel"
         assert events[0]["model"] == conversation.model
         assert "prompt" in events[0]
-        assert "system_prompt" in events[0]
+        assert "system_prompt" not in events[0]  # the desk is the whole prompt
         assert events[0]["params"] == {
             "temperature": core.TEMPERATURE,
             "top_p": core.TOP_P,
@@ -925,18 +1000,3 @@ class TestPassMark:
         completion = core.Completion(text="NOTHING-TO-SAY the room is fine")
         assert completion.passed and not completion.echoed
         assert completion.reason_for_passing == "the room is fine"
-
-
-class TestLiveLine:
-    def test_live_offline_or_unknown(self, conversation):
-        kwargs = dict(
-            channel_name="testchannel", stream_title="t", game_name="g", emotes=[]
-        )
-        assert "The stream is live right now." in core.build_system_prompt(
-            conversation, live=True, **kwargs
-        )
-        assert "The stream is offline right now." in core.build_system_prompt(
-            conversation, live=False, **kwargs
-        )
-        unknown = core.build_system_prompt(conversation, **kwargs)
-        assert "live right now" not in unknown and "offline right now" not in unknown

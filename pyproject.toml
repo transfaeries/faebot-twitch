@@ -17,6 +17,10 @@ websockets = "^14.0"
 numpy = "^2.0.0"
 aiohttp = "^3.11.0"
 jinja2 = "^3.1.0"
+# faebot-core, a sibling checkout on both hosts (dev: faebot-private/faebot-core;
+# prod: /home/faebot/faebot-core). The desk the twitch-me wakes at is laid by
+# core from her diary — the house walk, 2026-10-07.
+faebot-core = { path = "../faebot-core", develop = true }
 
 # The ear's hearing — VAD, Whisper, the GPU. Only the ear imports them, and
 # lazily, so the body installs without: on the ear's machine,

@@ -384,7 +384,9 @@ def lay_desk(
         silence=SENTINEL_SILENCE,
         reply_percent=int(conversation.frequency * 100),
         voice_percent=int(conversation.voice_frequency * 100),
-        called=called,
+        # the login, framed as addressing, not naming (her ruling, 10-08):
+        # the account @mentions reach — identity is hers, on her pages
+        called=f"{called} (the account @mentions reach)" if called else None,
         lines=(
             stream_line(stream_title, game_name, live),
             f"emotes you can use here: {' '.join(emotes)}" if emotes else "",

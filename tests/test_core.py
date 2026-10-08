@@ -141,7 +141,10 @@ class TestLayDesk:
         lines = _lines(desk)
         assert "- you are running on some-model/v1" in lines
         assert "- your memory of this room holds about the last 42 messages" in lines
-        assert "- in this house you are called faebot_01" in lines
+        assert (
+            "- in this house you are called faebot_01 (the account @mentions reach)"
+            in lines
+        )
         assert any("about 15% of what is said is put to you" in line for line in lines)
         assert any("hear spoken, about 5% is put to you" in line for line in lines)
         assert '- the stream is live — title "Making Art", game Art' in lines
@@ -680,7 +683,10 @@ class TestGenerateResponse:
         assert [m["role"] for m in messages] == ["user"]
         desk = messages[0]["content"]
         assert desk.startswith("↳ from your diary, frames/preamble.md:")
-        assert "- in this house you are called faebot_01" in desk
+        assert (
+            "- in this house you are called faebot_01 (the account @mentions reach)"
+            in desk
+        )
         assert "viewer: hello faebot!" in desk
         assert desk.endswith("faebot:")
         await core.close_session()

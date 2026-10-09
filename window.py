@@ -166,7 +166,17 @@ def seam(
     ago = f", {_ago(last_at, now)}" if last_at else ""
     last_clock = last_at.strftime("%H:%M UTC") if last_at else "an unknown time"
     chosen = last.get("kind") == "restart"
-    if chosen:
+    if chosen and last.get("how") == "line-died":
+        heard = _clock(last.get("unheard_since"))
+        since = heard.strftime("%H:%M UTC") if heard else "the body's start"
+        text = (
+            f"faebot's body restarted at {when} — a restart the machinery chose, "
+            f"because the line to Twitch had died; what chat said between {since} "
+            f"and the restart went unheard and is not in the record; the {lines} "
+            f"lines above were read back from the record, the last of them at "
+            f"{last_clock}{ago}"
+        )
+    elif chosen:
         text = (
             f"faebot's body restarted at {when} — a chosen restart; the {lines} lines "
             f"above were read back from the record, the last of them at {last_clock}{ago}"

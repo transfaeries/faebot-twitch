@@ -17,6 +17,19 @@ import stream
 import window
 from commands import FaebotCommands
 
+DEAD_LINE_EXIT = 3  # non-zero: the unit's Restart=on-failure brings her back
+DEAD_LINE_WORDS = ("closing transport", "closed", "connection reset", "not connected")
+
+
+def line_is_dead(error: Exception) -> bool:
+    """Is this send failure the line itself, dead — not a rate limit or a
+    bad message? ConnectionError and its aiohttp kin, or the transport's
+    own words for it."""
+    if isinstance(error, ConnectionError):
+        return True
+    said = str(error).lower()
+    return any(word in said for word in DEAD_LINE_WORDS)
+
 
 TWITCH_TOKEN = os.getenv("TWITCH_TOKEN", "")
 INITIAL_CHANNELS = os.getenv("INITIAL_CHANNELS", "").split(",")
@@ -44,6 +57,7 @@ class Faebot(commands.Bot, FaebotCommands):
     def __init__(self, event_queue: asyncio.Queue | None = None):
         self.emotes: list = []
         self.event_queue = event_queue
+        self._line_died = False  # a dead line is reported once, then the exit
         self.whisper_filter: list[str] = [
             "faebot.com",
         ]
@@ -310,6 +324,8 @@ class Faebot(commands.Bot, FaebotCommands):
                     "error": f"twitch send failed: {type(e).__name__}: {e}",
                 },
             )
+            if line_is_dead(e):
+                await self.line_died(channel_name, e)
             return "send-failed"
 
         # NOTE: this is optimistic. `channel.send` returning means TwitchIO
@@ -352,6 +368,47 @@ class Faebot(commands.Bot, FaebotCommands):
         except OSError as error:
             logging.warning(f"could not read {GOODNIGHT_FILE}: {error}")
             return ""
+
+    async def line_died(self, channel_name: str, error: Exception) -> None:
+        """The line to Twitch is dead and TwitchIO hasn't noticed (10-09: a
+        websocket stuck "closing" for 3h46m — she heard the stream through
+        her ear and answered into a closed pipe, deaf to chat and mute,
+        nothing noticing). The body says so in the record, in the
+        machinery's name, and restarts itself: systemd brings her back on a
+        non-zero exit, and the wake reads the restart as chosen — by the
+        machinery, labeled — with the hole named: chat since the line last
+        spoke went unheard and is not in the record. The goodnight is not
+        said; there is no line to say it on."""
+        if getattr(self, "_line_died", False):  # the tests' bot skips __init__
+            return
+        self._line_died = True
+        now = core.datetime.datetime.now(core.datetime.UTC).strftime("%H:%M UTC")
+        heard = capture.last_heard_at()
+        since = (
+            core.datetime.datetime.fromisoformat(heard).strftime("%H:%M UTC")
+            if heard
+            else "this body started"
+        )
+        told = core.machinery_line(
+            f"the line to Twitch died ({type(error).__name__}) — faebot's body "
+            f"restarts itself at {now} to get it back; what chat said since {since} "
+            f"went unheard and is not in the record"
+        )
+        logging.error(told)
+        core.ensure_conversation(channel_name).chatlog.append(told)
+        capture.record_restart(
+            channel_name, told, how="line-died", unheard_since=heard, error=str(error)
+        )
+        core.put_event(
+            self.event_queue,
+            {"type": "error", "channel": channel_name, "error": told},
+        )
+        await asyncio.sleep(0.5)  # the dashboard's event and the log, out
+        self.restart_self()
+
+    def restart_self(self) -> None:
+        """Leave non-zero so the unit's Restart=on-failure brings her back."""
+        os._exit(DEAD_LINE_EXIT)
 
     async def goodnight(self):
         """A chosen stop: tell her a restart is coming, let her say her last

@@ -238,10 +238,25 @@ def record_restart(channel_name: str, line: str, **meta) -> None:
 _RAW_SKIP_PREFIXES = ("PING", "PONG")
 
 
+LAST_HEARD_AT: str | None = (
+    None  # the newest raw IRC line's clock — proof the line is alive
+)
+
+
+def last_heard_at() -> str | None:
+    """When the line to Twitch last carried anything (ISO, UTC) — the edge of
+    what the record can know when the line dies unnoticed. None before the
+    first line of this process."""
+    return LAST_HEARD_AT
+
+
 def record_raw(data: str) -> None:
     """Catch-all: every raw IRC line TwitchIO receives. Guarantees nothing we
     didn't anticipate slips past — unknown commands, membership, roomstate, notices.
     Verbatim; interpret offline. Skips only PING/PONG keepalives."""
+    global LAST_HEARD_AT
+    if (data or "").strip():
+        LAST_HEARD_AT = datetime.datetime.now(datetime.UTC).isoformat()
     if not is_enabled():
         return
     try:

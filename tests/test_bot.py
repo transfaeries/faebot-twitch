@@ -326,6 +326,59 @@ class TestGenerateAndSend:
         assert event["id"] == generation_id
         assert "send failed" in event["error"].lower()
 
+    @pytest.mark.asyncio
+    async def test_a_dead_line_is_said_in_the_record_and_the_body_restarts_itself(
+        self, mock_faebot, openrouter_success
+    ):
+        """10-09: a websocket stuck closing for hours, nothing noticing. A send
+        that fails because the line is dead records a machinery-chosen restart
+        with the hole named, then leaves non-zero for systemd."""
+        core.ensure_conversation("testchannel")
+        openrouter_success("hello!")
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock(
+            side_effect=ConnectionResetError("Cannot write to closing transport")
+        )
+        mock_faebot.get_channel = MagicMock(return_value=mock_channel)
+        mock_faebot.restart_self = MagicMock()
+        with patch("bot.capture.record_restart") as record_restart, patch(
+            "bot.capture.last_heard_at", return_value="2026-10-09T15:40:32+00:00"
+        ):
+            outcome = await mock_faebot._generate_and_send(
+                "testchannel", trigger_type="chat"
+            )
+            assert outcome == "send-failed"
+            openrouter_success("again")
+            # a second failure says nothing more and restarts nothing twice
+            await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
+        assert record_restart.call_count == 1
+        name, told = record_restart.call_args.args
+        assert name == "testchannel" and told.startswith(core.MACHINERY)
+        assert "the line to Twitch died" in told and "since 15:40 UTC" in told
+        assert "not in the record" in told
+        assert record_restart.call_args.kwargs["how"] == "line-died"
+        assert (
+            record_restart.call_args.kwargs["unheard_since"]
+            == "2026-10-09T15:40:32+00:00"
+        )
+        assert mock_faebot.restart_self.call_count == 1
+        assert told in core.ensure_conversation("testchannel").chatlog
+
+    @pytest.mark.asyncio
+    async def test_a_send_that_fails_for_another_reason_does_not_restart(
+        self, mock_faebot, openrouter_success
+    ):
+        core.ensure_conversation("testchannel")
+        openrouter_success("hello!")
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock(side_effect=ValueError("message too long"))
+        mock_faebot.get_channel = MagicMock(return_value=mock_channel)
+        mock_faebot.restart_self = MagicMock()
+        with patch("bot.capture.record_restart") as record_restart:
+            await mock_faebot._generate_and_send("testchannel", trigger_type="chat")
+        assert record_restart.call_count == 0
+        assert mock_faebot.restart_self.call_count == 0
+
 
 # ── event_message ────────────────────────────────────────────────────
 

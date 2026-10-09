@@ -201,6 +201,22 @@ class TestSeam:
         assert "12 lines" in line
         assert "02:07 UTC, 3 minutes ago" in line
 
+    def test_a_restart_the_machinery_chose_for_a_dead_line_names_the_hole(self):
+        last = row(
+            "restart",
+            3,
+            line="…",
+            how="line-died",
+            unheard_since=(NOW - datetime.timedelta(hours=4)).isoformat(),
+        )
+        line, chosen = window.seam(12, last, NOW)
+        assert chosen is True
+        assert "a restart the machinery chose" in line
+        assert "the line to Twitch had died" in line
+        assert "between 22:10 UTC and the restart went unheard" in line
+        assert "not in the record" in line
+        assert "12 lines" in line
+
     def test_a_stop_that_was_not_chosen_gets_its_clock(self):
         last = row("chat", 150, author="a", content="…")
         line, chosen = window.seam(50, last, NOW)

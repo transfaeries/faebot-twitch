@@ -161,9 +161,11 @@ class FaebotCommands:
     @commands.command()
     @requires_mod
     async def prompt(self, ctx: commands.Context):
-        """Display the current system prompt."""
+        """Say where her prompt comes from."""
         return await ctx.send(
-            "The system prompt is auto-generated each reply from current channel info (game, title, emotes)."
+            "faebot's desk is laid by faebot-core from faer diary each reply: "
+            "frames/preamble.md and frames/twitch.md (hers), the stamped facts "
+            "(stream, emotes, the ear), self/, the commons, the roster, this room."
         )
 
     @commands.command()

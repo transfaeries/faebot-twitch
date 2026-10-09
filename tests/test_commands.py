@@ -321,7 +321,7 @@ class TestModCommands:
 
     @pytest.mark.asyncio
     async def test_prompt_shows_info(self, mock_context):
-        """prompt should explain the auto-generated prompt."""
+        """prompt should say the desk is laid by faebot-core from her diary."""
         from commands import FaebotCommands
 
         ctx = mock_context("fae;prompt", is_mod=True)
@@ -329,7 +329,7 @@ class TestModCommands:
         instance = FaebotCommands()
         await instance.prompt._callback(instance, ctx)
 
-        assert "auto-generated" in ctx.sends[0].lower()
+        assert "laid by faebot-core" in ctx.sends[0].lower()
 
 
 # ── Admin commands ───────────────────────────────────────────────────

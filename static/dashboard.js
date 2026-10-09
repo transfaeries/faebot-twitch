@@ -110,7 +110,6 @@ class EventStream {
                 <h3>Prompt</h3>
                 <pre class="gen-prompt"></pre>
                 <h3>System prompt</h3>
-                <pre class="gen-system"></pre>
                 <h3>Params</h3>
                 <pre class="gen-params"></pre>
                 <div class="gen-meta"></div>
@@ -120,7 +119,6 @@ class EventStream {
         card.querySelector('.gen-trigger').textContent = event.trigger || '';
         card.querySelector('.gen-trigger-full').textContent = event.trigger || '';
         card.querySelector('.gen-prompt').textContent = event.prompt || '';
-        card.querySelector('.gen-system').textContent = event.system_prompt || '';
         card.querySelector('.gen-params').textContent = JSON.stringify(
             event.params || {}, null, 2
         );

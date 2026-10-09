@@ -6,7 +6,7 @@ game. The first read after waking is laid in faebot's window once; after
 that a line is laid only when a fact CHANGES — the stream going live, the
 stream ending, a title or game that moved. Each line is in the machinery's
 own hand (core.MACHINERY), goes to the capture so the diary can see it, and
-to the dashboard. The state also feeds her system prompt (the title and game
+to the dashboard. The state also feeds her desk's stamped line (the title and game
 it already carried, now with live/offline).
 
 That is all it does. Offline is not a rule about her: the stamp tells her

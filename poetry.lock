@@ -605,6 +605,20 @@ files = [
 tests = ["asttokens (>=2.1.0)", "coverage", "coverage-enable-subprocess", "ipython", "littleutils", "pytest", "rich ; python_version >= \"3.11\""]
 
 [[package]]
+name = "faebot-core"
+version = "0.0.0"
+description = "faebot's cognition core — the brain the frontend bots become adapters of"
+optional = false
+python-versions = ">=3.11"
+groups = ["main"]
+files = []
+develop = true
+
+[package.source]
+type = "directory"
+url = "../faebot-core"
+
+[[package]]
 name = "fastapi"
 version = "0.115.14"
 description = "FastAPI framework, high performance, easy to learn, fast to code, ready for production"
@@ -3506,4 +3520,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "4186925e6c09e52e24ee674b5a3b3c4044d20027a5eb1063442f1369668cb06b"
+content-hash = "1e7e3cbd342720a04518ecd1ee770670e40a1acf02c11e2f5f8acee78099a065"

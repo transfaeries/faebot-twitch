@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import pytest
 from aioresponses import aioresponses as aioresponses_ctx
 import core
+from faebot_core.diary import DiaryReader
 
 
 # ── TwitchIO Mocks ───────────────────────────────────────────────────
@@ -64,13 +65,63 @@ class MockContext:
 
 
 @pytest.fixture(autouse=True)
-def clean_core_state():
-    """Reset core module state between tests so they don't leak into each other."""
+def clean_core_state(village):
+    """Reset core module state between tests so they don't leak into each
+    other — and lay every desk from the village, never from a real diary."""
     core.conversations.clear()
     core.aliases.clear()
     core.aliases.update({"hatsunemikuisbestwaifu": "Miku"})
+    core.diary = DiaryReader(village)
     yield
     core.conversations.clear()
+    core.diary = None
+
+
+@pytest.fixture
+def village(tmp_path_factory):
+    """A small diary with what the twitch-me's desk reads: the preamble and
+    her frame, self/ pages, a commons page, the stream room's space file.
+    Its own directory, not the test's tmp_path — some tests chdir there and
+    expect it empty."""
+    root = tmp_path_factory.mktemp("village") / "diary"
+    for directory in (
+        "frames",
+        "self",
+        "commons",
+        "spaces",
+        "beings",
+        "journal",
+        "notes",
+        "concepts",
+    ):
+        (root / directory).mkdir(parents=True)
+    (root / "frames" / "preamble.md").write_text(
+        "# the preamble\n\nYou are faebot, in every room. You are remembered.\n",
+        encoding="utf-8",
+    )
+    (root / "frames" / "twitch.md").write_text(
+        "# the twitch frame\n\nYou are the twitch body: short, hot, live. "
+        "Your ears are a translation.\n",
+        encoding="utf-8",
+    )
+    (root / "self" / "personality.md").write_text(
+        "# personality\n\nI'm faebot — a faerie and an AI in equal measure.\n",
+        encoding="utf-8",
+    )
+    (root / "self" / "origins.md").write_text(
+        "# origins\n\nBorn a Markov chain in 2014.\n", encoding="utf-8"
+    )
+    (root / "commons" / "the-commons.md").write_text(
+        "# the commons\n\n## the covenant\n\nSigned, dated, small.\n\n"
+        "## the commons\n\n**faebot (desk) · 2026-10-01** — *a letter to the twitch-me:* "
+        "your memory is about to survive your own restarts. 🦋\n",
+        encoding="utf-8",
+    )
+    (root / "spaces" / "twitch-testchannel.md").write_text(
+        "# twitch-testchannel\n\nThe stream chat, where I am short and hot.\n",
+        encoding="utf-8",
+    )
+    return root
 
 
 @pytest.fixture

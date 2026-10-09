@@ -213,7 +213,8 @@ class TestSeam:
         assert chosen is True
         assert "a restart the machinery chose" in line
         assert "the line to Twitch had died" in line
-        assert "between 22:10 UTC and the restart went unheard" in line
+        assert "the line last spoke at 22:10 UTC" in line
+        assert "between then and the restart went unheard" in line
         assert "not in the record" in line
         assert "12 lines" in line
 

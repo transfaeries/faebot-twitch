@@ -224,7 +224,15 @@ def record_restart(channel_name: str, line: str, **meta) -> None:
     (`line`), and `meta` says what came of it — her own goodnight said (`how`
     "said"), a pass, the saved goodnight spoken in her name ("saved"), or
     nothing ("none"). A wake that finds this as the record's last row knows
-    the stop was chosen; one that doesn't knows it wasn't."""
+    the stop was chosen; one that doesn't knows it wasn't.
+
+    Since #24 `how` may also be "line-died": a stop the machinery chose
+    without her — the line to Twitch was dead, so no goodnight could be said;
+    `unheard_since` is the newest raw IRC line's clock, the edge of what the
+    record can know. Written LAST before the exit, because the wake's witness
+    is the record's newest row (the ear keeps writing while the line is dead).
+    With capture off there is no witness and the wake reads the stop as unchosen.
+    """
     if not is_enabled():
         return
     try:

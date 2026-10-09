@@ -6,6 +6,10 @@ from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
 import core
 
 
+async def _async_noop(_ignored=None):
+    return None
+
+
 # ── filter_transcription ─────────────────────────────────────────────
 
 
@@ -354,7 +358,8 @@ class TestGenerateAndSend:
         assert record_restart.call_count == 1
         name, told = record_restart.call_args.args
         assert name == "testchannel" and told.startswith(core.MACHINERY)
-        assert "the line to Twitch died" in told and "since 15:40 UTC" in told
+        assert "the line to Twitch died" in told
+        assert "the line last spoke at 15:40 UTC" in told
         assert "not in the record" in told
         assert record_restart.call_args.kwargs["how"] == "line-died"
         assert (
@@ -363,6 +368,26 @@ class TestGenerateAndSend:
         )
         assert mock_faebot.restart_self.call_count == 1
         assert told in core.ensure_conversation("testchannel").chatlog
+
+    @pytest.mark.asyncio
+    async def test_the_witness_row_is_written_last_right_before_the_exit(
+        self, mock_faebot
+    ):
+        """The ear keeps landing voice rows while the line is dead, and the
+        wake's witness is the record's newest row — so the restart row goes
+        after the dashboard's drain, and the exit follows it at once."""
+        order: list[str] = []
+        mock_faebot.restart_self = MagicMock(side_effect=lambda: order.append("exit"))
+        mock_faebot.event_queue = None
+        with patch(
+            "bot.capture.record_restart",
+            side_effect=lambda *a, **k: order.append("restart-row"),
+        ), patch("bot.capture.last_heard_at", return_value=None), patch(
+            "bot.asyncio.sleep",
+            side_effect=lambda _: _async_noop(order.append("drain")),
+        ):
+            await mock_faebot.line_died("testchannel", ConnectionResetError("x"))
+        assert order == ["drain", "restart-row", "exit"]
 
     @pytest.mark.asyncio
     async def test_a_send_that_fails_for_another_reason_does_not_restart(

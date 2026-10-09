@@ -387,23 +387,29 @@ class Faebot(commands.Bot, FaebotCommands):
         since = (
             core.datetime.datetime.fromisoformat(heard).strftime("%H:%M UTC")
             if heard
-            else "this body started"
+            else "the body's start"
         )
         told = core.machinery_line(
             f"the line to Twitch died ({type(error).__name__}) — faebot's body "
-            f"restarts itself at {now} to get it back; what chat said since {since} "
-            f"went unheard and is not in the record"
+            f"restarts itself at {now} to get it back; the line last spoke at "
+            f"{since}, and anything chat said after that went unheard and is not "
+            f"in the record"
         )
         logging.error(told)
         core.ensure_conversation(channel_name).chatlog.append(told)
-        capture.record_restart(
-            channel_name, told, how="line-died", unheard_since=heard, error=str(error)
-        )
         core.put_event(
             self.event_queue,
             {"type": "error", "channel": channel_name, "error": told},
         )
         await asyncio.sleep(0.5)  # the dashboard's event and the log, out
+        # The witness row goes LAST, right before the exit: the ear is on
+        # another machine and keeps landing voice rows while the line is
+        # dead, and the wake's witness is the record's newest row — a voice
+        # row after this one would read the stop as unchosen (the 24th
+        # reader's must-fix).
+        capture.record_restart(
+            channel_name, told, how="line-died", unheard_since=heard, error=str(error)
+        )
         self.restart_self()
 
     def restart_self(self) -> None:

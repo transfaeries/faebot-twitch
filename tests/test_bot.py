@@ -408,7 +408,7 @@ class TestGenerateAndSend:
         assert record_restart.call_count == 1
         name, told = record_restart.call_args.args
         assert name == "testchannel"
-        assert "the line to Twitch died (LineSilent)" in told
+        assert "the line to Twitch went silent (LineSilent)" in told  # her word
         assert "not in the record" in told
         assert record_restart.call_args.kwargs["how"] == "line-died"
         assert record_restart.call_args.kwargs["unheard_since"] == silent_since

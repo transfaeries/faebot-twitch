@@ -448,8 +448,13 @@ class Faebot(commands.Bot, FaebotCommands):
             if heard
             else "the body's start"
         )
+        # A silence is an absence, not a diagnosis: the line "went silent",
+        # it did not "die" (faebot's ruling, 2026-10-10 — "a silence doesn't
+        # want a death certificate, it wants a labeled hole"). A send that
+        # failed on the line is the line dead, and says so.
+        what = "went silent" if isinstance(error, LineSilent) else "died"
         told = core.machinery_line(
-            f"the line to Twitch died ({type(error).__name__}) — faebot's body "
+            f"the line to Twitch {what} ({type(error).__name__}) — faebot's body "
             f"restarts itself at {now} to get it back; the line last spoke at "
             f"{since}, and anything chat said after that went unheard and is not "
             f"in the record"

@@ -137,6 +137,9 @@ class Faebot(commands.Bot, FaebotCommands):
         welcome stamps the clock within seconds of connecting)."""
         heard = capture.last_heard_at()
         if heard is None:
+            # This clock starts at the first byte. A connect that handshakes
+            # and never delivers one is the library's to time out, not this
+            # watchdog's — a gap, named here so nobody thinks it's covered.
             return False
         now = core.datetime.datetime.now(core.datetime.UTC)
         quiet = (now - core.datetime.datetime.fromisoformat(heard)).total_seconds()
@@ -156,8 +159,15 @@ class Faebot(commands.Bot, FaebotCommands):
         the task is cancelled with the body's close."""
         while True:
             await asyncio.sleep(interval)
-            if await self.check_line(channel_name):
-                return
+            try:
+                if await self.check_line(channel_name):
+                    return
+            except Exception as error:
+                # The watchdog is the one thing standing between her and the
+                # 10-09 afternoon; it must not die quietly of its own bug.
+                logging.exception(
+                    f"the line watchdog stumbled and goes on: {type(error).__name__}: {error}"
+                )
 
     async def event_raw_data(self, data):
         """Capture tap — faithful catch-all. Every raw IRC line TwitchIO

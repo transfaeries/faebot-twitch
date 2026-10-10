@@ -451,6 +451,23 @@ class TestGenerateAndSend:
         assert mock_faebot.check_line.call_count == 3
 
     @pytest.mark.asyncio
+    async def test_the_watchdog_survives_its_own_stumble(self, mock_faebot):
+        """A bug in the check must not end the watch silently — that is the
+        failure shape this watchdog exists to kill, one level up."""
+        looks = iter([RuntimeError("a stumble"), False, True])
+
+        async def look(_):
+            outcome = next(looks)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        mock_faebot.check_line = AsyncMock(side_effect=look)
+        with patch("bot.asyncio.sleep", side_effect=lambda _: _async_noop(None)):
+            await mock_faebot.watch_line("testchannel", interval=0)
+        assert mock_faebot.check_line.call_count == 3
+
+    @pytest.mark.asyncio
     async def test_a_send_that_fails_for_another_reason_does_not_restart(
         self, mock_faebot, openrouter_success
     ):

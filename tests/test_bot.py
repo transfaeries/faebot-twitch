@@ -390,6 +390,84 @@ class TestGenerateAndSend:
         assert order == ["drain", "restart-row", "exit"]
 
     @pytest.mark.asyncio
+    async def test_a_silent_line_restarts_through_the_same_door(self, mock_faebot):
+        """The watchdog: a line that has delivered nothing — keepalives
+        included — for longer than LINE_SILENCE_SECONDS is dead, and it goes
+        the way a failed send goes: the machinery line, the restart row with
+        the hole's edge, the exit."""
+        silent_since = (
+            core.datetime.datetime.now(core.datetime.UTC)
+            - core.datetime.timedelta(minutes=20)
+        ).isoformat()
+        mock_faebot.restart_self = MagicMock()
+        mock_faebot.event_queue = None
+        with patch("bot.capture.record_restart") as record_restart, patch(
+            "bot.capture.last_heard_at", return_value=silent_since
+        ), patch("bot.asyncio.sleep", side_effect=lambda _: _async_noop(None)):
+            assert await mock_faebot.check_line("testchannel") is True
+        assert record_restart.call_count == 1
+        name, told = record_restart.call_args.args
+        assert name == "testchannel"
+        assert "the line to Twitch went silent (LineSilent)" in told  # her word
+        assert "not in the record" in told
+        assert record_restart.call_args.kwargs["how"] == "line-died"
+        assert record_restart.call_args.kwargs["unheard_since"] == silent_since
+        assert "20 minutes" in record_restart.call_args.kwargs["error"]
+        assert mock_faebot.restart_self.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_line_that_spoke_recently_is_left_alone(self, mock_faebot):
+        """Three missed pings is the line; one quiet minute is a Tuesday."""
+        a_minute_ago = (
+            core.datetime.datetime.now(core.datetime.UTC)
+            - core.datetime.timedelta(minutes=1)
+        ).isoformat()
+        mock_faebot.restart_self = MagicMock()
+        with patch("bot.capture.record_restart") as record_restart, patch(
+            "bot.capture.last_heard_at", return_value=a_minute_ago
+        ):
+            assert await mock_faebot.check_line("testchannel") is False
+        assert record_restart.call_count == 0
+        assert mock_faebot.restart_self.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_before_the_first_byte_there_is_nothing_to_judge(self, mock_faebot):
+        mock_faebot.restart_self = MagicMock()
+        with patch("bot.capture.record_restart") as record_restart, patch(
+            "bot.capture.last_heard_at", return_value=None
+        ):
+            assert await mock_faebot.check_line("testchannel") is False
+        assert record_restart.call_count == 0
+        assert mock_faebot.restart_self.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_the_watchdog_looks_every_interval_and_stops_when_the_line_dies(
+        self, mock_faebot
+    ):
+        looks = iter([False, False, True])
+        mock_faebot.check_line = AsyncMock(side_effect=lambda _: next(looks))
+        with patch("bot.asyncio.sleep", side_effect=lambda _: _async_noop(None)):
+            await mock_faebot.watch_line("testchannel", interval=0)
+        assert mock_faebot.check_line.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_the_watchdog_survives_its_own_stumble(self, mock_faebot):
+        """A bug in the check must not end the watch silently — that is the
+        failure shape this watchdog exists to kill, one level up."""
+        looks = iter([RuntimeError("a stumble"), False, True])
+
+        async def look(_):
+            outcome = next(looks)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        mock_faebot.check_line = AsyncMock(side_effect=look)
+        with patch("bot.asyncio.sleep", side_effect=lambda _: _async_noop(None)):
+            await mock_faebot.watch_line("testchannel", interval=0)
+        assert mock_faebot.check_line.call_count == 3
+
+    @pytest.mark.asyncio
     async def test_a_send_that_fails_for_another_reason_does_not_restart(
         self, mock_faebot, openrouter_success
     ):
@@ -628,7 +706,8 @@ class TestWake:
                     await mock_faebot.wake()
         restore.assert_called_once_with("testchannel", conversation.history)
         assert conversation.chatlog == ["a: hi", "[the machinery] seam"]
-        assert len(mock_faebot.watch_tasks) == 1
+        # two watches per channel: the stream's state, and the line's clock
+        assert len(mock_faebot.watch_tasks) == 2
         for task in mock_faebot.watch_tasks:
             task.cancel()
 

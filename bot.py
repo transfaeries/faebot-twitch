@@ -292,6 +292,7 @@ class Faebot(commands.Bot, FaebotCommands):
                 completion.reason_for_passing,
                 generation_id=generation_id,
                 trigger_type=trigger_type,
+                prompt=completion.prompt,  # the desk she chose quiet on
                 **completion.capture_meta(),
             )
             core.put_event(
@@ -343,6 +344,7 @@ class Faebot(commands.Bot, FaebotCommands):
             response,
             generation_id=generation_id,
             trigger_type=trigger_type,
+            prompt=completion.prompt,  # the desk this line was laid on
             **completion.capture_meta(),
         )
 

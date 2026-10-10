@@ -229,6 +229,9 @@ class TestGenerateAndSend:
         assert meta["finish_reason"] == "stop"
         assert meta["model"] == "moonshotai/kimi-k3"
         assert "elapsed" in meta
+        # the laid desk rides on the row, whole, ending in her pen line
+        assert meta["prompt"].endswith("faebot:")
+        assert "testchannel" in meta["prompt"]
 
         await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)  # generating
         event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)
@@ -269,6 +272,7 @@ class TestGenerateAndSend:
         args, meta = record_pass.call_args
         assert args == ("testchannel", "they're busy")
         assert meta["reasoning"] == "ember is mid-sentence"
+        assert meta["prompt"].endswith("faebot:")  # the desk she chose quiet on
 
         await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)  # generating
         event = await asyncio.wait_for(mock_faebot.event_queue.get(), timeout=1.0)

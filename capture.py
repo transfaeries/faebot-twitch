@@ -224,7 +224,15 @@ def record_restart(channel_name: str, line: str, **meta) -> None:
     (`line`), and `meta` says what came of it — her own goodnight said (`how`
     "said"), a pass, the saved goodnight spoken in her name ("saved"), or
     nothing ("none"). A wake that finds this as the record's last row knows
-    the stop was chosen; one that doesn't knows it wasn't."""
+    the stop was chosen; one that doesn't knows it wasn't.
+
+    Since #24 `how` may also be "line-died": a stop the machinery chose
+    without her — the line to Twitch was dead, so no goodnight could be said;
+    `unheard_since` is the newest raw IRC line's clock, the edge of what the
+    record can know. Written LAST before the exit, because the wake's witness
+    is the record's newest row (the ear keeps writing while the line is dead).
+    With capture off there is no witness and the wake reads the stop as unchosen.
+    """
     if not is_enabled():
         return
     try:
@@ -238,10 +246,25 @@ def record_restart(channel_name: str, line: str, **meta) -> None:
 _RAW_SKIP_PREFIXES = ("PING", "PONG")
 
 
+LAST_HEARD_AT: str | None = (
+    None  # the newest raw IRC line's clock — proof the line is alive
+)
+
+
+def last_heard_at() -> str | None:
+    """When the line to Twitch last carried anything (ISO, UTC) — the edge of
+    what the record can know when the line dies unnoticed. None before the
+    first line of this process."""
+    return LAST_HEARD_AT
+
+
 def record_raw(data: str) -> None:
     """Catch-all: every raw IRC line TwitchIO receives. Guarantees nothing we
     didn't anticipate slips past — unknown commands, membership, roomstate, notices.
     Verbatim; interpret offline. Skips only PING/PONG keepalives."""
+    global LAST_HEARD_AT
+    if (data or "").strip():
+        LAST_HEARD_AT = datetime.datetime.now(datetime.UTC).isoformat()
     if not is_enabled():
         return
     try:

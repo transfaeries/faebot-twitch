@@ -221,6 +221,11 @@ class Completion:
     usage: dict[str, Any] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
     attempts: int = 1
+    # The desk this answer was laid on, whole — the one text the model read.
+    # Kept on the capture row (both bodies keep it; the discord body always
+    # has) so a cut, a drift or a pass can be read against the desk that
+    # produced it, long after the window has moved on. Never sent to chat.
+    prompt: str = ""
 
     @property
     def is_empty(self) -> bool:
@@ -609,6 +614,7 @@ async def generate_response(
             },
         )
         raise
+    completion = replace(completion, prompt=prompt)
 
     if completion.passed:
         # Chosen silence. The reason (if fae gave one) is kept for the capture

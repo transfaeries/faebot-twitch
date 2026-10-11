@@ -704,6 +704,9 @@ class TestGenerateResponse:
             )
         assert result.text == "hi there!"
         assert "faebot: hi there!" in conversation.chatlog
+        # the completion carries the whole desk it was laid on, pen line last
+        assert result.prompt.endswith("faebot:")
+        assert "viewer: hello faebot!" in result.prompt
         await core.close_session()
 
     @pytest.mark.asyncio

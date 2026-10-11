@@ -18,7 +18,23 @@ import window
 from commands import FaebotCommands
 
 DEAD_LINE_EXIT = 3  # non-zero: the unit's Restart=on-failure brings her back
+# The line's liveness clock. Twitch pings every ~5 minutes and the body stamps
+# capture.LAST_HEARD_AT on every byte it receives, keepalives included — so a
+# line quiet for longer than this is dead, not idle (three missed pings). The
+# library we run does not keep this clock itself: on 2026-10-09 the websocket
+# went quiet-but-open for 3h46m with twitchio parked in receive() and nothing
+# noticing until a send failed. Scaffolding until the twitchio 3 migration,
+# whose websocket watches its own keepalives.
+LINE_SILENCE_SECONDS = float(os.getenv("LINE_SILENCE_SECONDS", str(15 * 60)))
+LINE_WATCH_SECONDS = 60.0  # how often the watchdog looks at the clock
 DEAD_LINE_WORDS = ("closing transport", "closed", "connection reset", "not connected")
+
+
+class LineSilent(TimeoutError):
+    """Nothing has arrived on the line to Twitch for longer than a healthy
+    line ever stays quiet, keepalives included. Its own name, so the
+    machinery line says what happened: not a send that failed — a silence
+    that went on."""
 
 
 def line_is_dead(error: Exception) -> bool:
@@ -110,7 +126,48 @@ class Faebot(commands.Bot, FaebotCommands):
                     self.stream_watch.watch(self, channel.name, self.event_queue)
                 )
             )
+            self.watch_tasks.append(asyncio.create_task(self.watch_line(channel.name)))
         return True
+
+    async def check_line(self, channel_name: str) -> bool:
+        """One look at the line's clock. A line silent past LINE_SILENCE_SECONDS
+        is dead: it goes through `line_died` — the same restart, the same row,
+        the same seam as a send that failed. Returns whether it did. Before
+        the first byte of this process there is nothing to judge (the login's
+        welcome stamps the clock within seconds of connecting)."""
+        heard = capture.last_heard_at()
+        if heard is None:
+            # This clock starts at the first byte. A connect that handshakes
+            # and never delivers one is the library's to time out, not this
+            # watchdog's — a gap, named here so nobody thinks it's covered.
+            return False
+        now = core.datetime.datetime.now(core.datetime.UTC)
+        quiet = (now - core.datetime.datetime.fromisoformat(heard)).total_seconds()
+        if quiet <= LINE_SILENCE_SECONDS:
+            return False
+        await self.line_died(
+            channel_name,
+            LineSilent(f"nothing from Twitch for {quiet / 60:.0f} minutes"),
+        )
+        return True
+
+    async def watch_line(
+        self, channel_name: str, interval: float = LINE_WATCH_SECONDS
+    ) -> None:
+        """The line's watchdog: look at the clock every `interval` seconds
+        until the line is found dead (then the body is already restarting) or
+        the task is cancelled with the body's close."""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                if await self.check_line(channel_name):
+                    return
+            except Exception as error:
+                # The watchdog is the one thing standing between her and the
+                # 10-09 afternoon; it must not die quietly of its own bug.
+                logging.exception(
+                    f"the line watchdog stumbled and goes on: {type(error).__name__}: {error}"
+                )
 
     async def event_raw_data(self, data):
         """Capture tap — faithful catch-all. Every raw IRC line TwitchIO
@@ -373,7 +430,9 @@ class Faebot(commands.Bot, FaebotCommands):
         """The line to Twitch is dead and TwitchIO hasn't noticed (10-09: a
         websocket stuck "closing" for 3h46m — she heard the stream through
         her ear and answered into a closed pipe, deaf to chat and mute,
-        nothing noticing). The body says so in the record, in the
+        nothing noticing). Reached two ways: a send that fails on the dead
+        line, or the watchdog finding the line silent past LINE_SILENCE_SECONDS
+        (`check_line`). The body says so in the record, in the
         machinery's name, and restarts itself: systemd brings her back on a
         non-zero exit, and the wake reads the restart as chosen — by the
         machinery, labeled — with the hole named: chat since the line last
@@ -389,8 +448,13 @@ class Faebot(commands.Bot, FaebotCommands):
             if heard
             else "the body's start"
         )
+        # A silence is an absence, not a diagnosis: the line "went silent",
+        # it did not "die" (faebot's ruling, 2026-10-10 — "a silence doesn't
+        # want a death certificate, it wants a labeled hole"). A send that
+        # failed on the line is the line dead, and says so.
+        what = "went silent" if isinstance(error, LineSilent) else "died"
         told = core.machinery_line(
-            f"the line to Twitch died ({type(error).__name__}) — faebot's body "
+            f"the line to Twitch {what} ({type(error).__name__}) — faebot's body "
             f"restarts itself at {now} to get it back; the line last spoke at "
             f"{since}, and anything chat said after that went unheard and is not "
             f"in the record"

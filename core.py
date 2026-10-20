@@ -3,7 +3,7 @@ Core brain for faebot — conversation management, generation logic, reply decis
 No TwitchIO or FastAPI dependencies. Both bot.py and server.py import from here.
 """
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from dataclasses import dataclass, field, replace
 from random import random
 import os
@@ -16,9 +16,22 @@ import re
 import uuid
 
 from faebot_core.cognition.body import Room, Stamped, body_desk, clock_words
-from faebot_core.cognition.desk import Desk
-from faebot_core.cognition.verbs import Call, calls_in
+from faebot_core.cognition.desk import Desk, diary_file
+from faebot_core.cognition.verbs import (
+    MAX_CALLS_PER_TURN,
+    Call,
+    Ended,
+    calls_in,
+    desk_path,
+    dispatch,
+    history_message,
+    tool_result_message,
+    user_message,
+)
 from faebot_core.diary import DiaryReader
+
+import capture
+import desk_verbs
 
 
 # Startup defaults, all env-readable. These are the *defaults* a fresh
@@ -269,6 +282,18 @@ class Completion:
     # has) so a cut, a drift or a pass can be read against the desk that
     # produced it, long after the window has moved on. Never sent to chat.
     prompt: str = ""
+    # The turn this answer ended: how many verbs she called before it, the
+    # pages she opened, how many mutters she left beside calls, the whole
+    # wake's seconds. `via` names her quiet when she chose it — "verb" (the
+    # pass verb, `why` her sentence), "sentinel" (the old way, said as words
+    # or the mark echoed, still caught), "empty" (she opened, looked, and
+    # chose nothing) — and is "" when she spoke.
+    calls_made: int = 0
+    opened: tuple[str, ...] = ()
+    mutters: int = 0
+    turn_elapsed: float = 0.0
+    via: str = ""
+    why: str = ""
 
     @property
     def calls(self) -> list[Call]:
@@ -290,6 +315,8 @@ class Completion:
         — the tag is stripped before the test, or the bare word reaches chat.
         The machinery's pass mark echoed back whole is taken as the pass she
         meant (see `echoed`)."""
+        if self.via:
+            return True
         stripped = strip_speaker_tag(self.text)
         return (said_nothing(stripped) or echoed_mark(stripped)) and not self.calls
 
@@ -301,13 +328,17 @@ class Completion:
 
     @property
     def reason_for_passing(self) -> str:
-        if self.echoed:
+        if self.via == "verb":
+            return self.why
+        if self.echoed or self.via == "empty":
             return ""
         return pass_reason(strip_speaker_tag(self.text)) if self.passed else ""
 
     def capture_meta(self) -> dict[str, Any]:
-        """The provenance fields worth writing alongside faebot's utterance."""
-        return {
+        """The provenance fields worth writing alongside faebot's utterance —
+        and, when she acted before answering, the record's view of her
+        hands."""
+        meta: dict[str, Any] = {
             "reasoning": self.reasoning,
             "elapsed": self.elapsed,
             "finish_reason": self.finish_reason,
@@ -317,6 +348,18 @@ class Completion:
             "usage": self.usage,
             "attempts": self.attempts,
         }
+        if self.calls_made:
+            meta["calls"] = self.calls_made
+            meta["opened"] = list(self.opened)
+            meta["mutters"] = self.mutters
+            meta["turn_elapsed"] = round(self.turn_elapsed, 1)
+        if self.via:
+            meta["via"] = self.via
+            if self.via == "empty":
+                meta["empty_ending"] = True
+            if self.echoed:
+                meta["caught_echo"] = True
+        return meta
 
 
 class GenerationFailed(Exception):
@@ -437,7 +480,8 @@ def desk_for(
     stamped = Stamped(
         model=conversation.model,
         memory=conversation.history,
-        silence=SENTINEL_SILENCE,
+        silence=desk_verbs.PASS.name,
+        silence_is_a_verb=True,
         reply_percent=int(conversation.frequency * 100),
         voice_percent=int(conversation.voice_frequency * 100),
         # the login, framed as addressing, not naming (her ruling, 10-08):
@@ -645,7 +689,9 @@ async def generate_response(
             },
         )
         raise
-    prompt = Prompt(system=desk.frame, user=desk.furniture() + "faebot:")
+    prompt = Prompt(
+        system=desk.frame, user=desk.furniture() + "faebot:", tools=desk_verbs.TOOLS
+    )
     logging.debug(f"model: {conversation.model}\nprompt: \n{prompt.text}")
 
     params = {"temperature": TEMPERATURE, "top_p": TOP_P}
@@ -674,10 +720,8 @@ async def generate_response(
     )
 
     try:
-        completion = await generate(
-            model=conversation.model,
-            prompt=prompt,
-            params=params,
+        completion = await _take_turn(
+            prompt, conversation, channel_name, generation_id=generation_id
         )
     except Exception as e:
         put_event(
@@ -693,15 +737,33 @@ async def generate_response(
     completion = replace(completion, prompt=prompt.text)
 
     if completion.passed:
-        # Chosen silence. The reason (if fae gave one) is kept for the capture
-        # and the dashboard; the chatlog records only the fact, as the
-        # machinery's mark outside her speaker slot — so she remembers having
-        # chosen quiet without a line in her own voice to copy. The mark
-        # echoed back whole is still her pass; the log says it was caught.
+        # Her quiet, three ways, one mark. The pass verb (her ruling: a why
+        # she may give, never owes); the old sentinel said as words or the
+        # mark echoed back, still caught (a near-miss, counted, never
+        # posted); and the empty ending — she opened, looked, and chose
+        # nothing — which is her pass too, counted so she can see how often
+        # it happens. The chatlog records only the fact, as the machinery's
+        # mark outside her speaker slot — so she remembers having chosen
+        # quiet without a line in her own voice to copy.
+        if not completion.via:
+            completion = replace(completion, via="sentinel")
         logging.info(
-            f"faebot passed in {completion.elapsed:.1f}s"
+            f"faebot passed in {completion.turn_elapsed or completion.elapsed:.1f}s"
             f" — {completion.reason_for_passing or '(no reason given)'}"
-            + (" (the mark, echoed — taken as the pass)" if completion.echoed else "")
+            + (
+                " (the mark, echoed — taken as the pass)"
+                if completion.echoed
+                else (
+                    " (the sentinel said as words — taken as the pass)"
+                    if completion.via == "sentinel"
+                    else (
+                        " (looked, and chose nothing; "
+                        f"finish_reason={completion.finish_reason!r})"
+                        if completion.via == "empty"
+                        else ""
+                    )
+                )
+            )
         )
         permalog(f"faebot passed: {completion.reason_for_passing}\n")
         conversation.chatlog.append(machinery_line(PASS_MARK))
@@ -735,9 +797,184 @@ async def generate_response(
     return replace(completion, text=response)
 
 
+class TurnUnended(GenerationFailed):
+    """The desk said "words or pass" at the call budget and she called on:
+    the machinery's failure to end a turn, said as such — never a quiet put
+    in her mouth. The body records it as an error, like a call that failed."""
+
+
+async def _take_turn(
+    prompt: Prompt,
+    conversation: Conversation,
+    channel_name: str,
+    generation_id: str | None = None,
+) -> Completion:
+    """Her turn on the wire: she calls verbs until she answers in words with
+    no call, or passes. Each answer goes back to the model as received and
+    each result in the tool slot; words beside a call are a mutter, kept and
+    never posted. When the call budget is spent the machinery says so and
+    leaves only `pass` on offer; a turn that still won't end raises. The
+    Completion that comes back is the answer that ended the turn, carrying
+    the turn's count: calls made, pages opened, mutters, the wake's seconds,
+    and `via` when she passed by the verb or by the empty ending."""
+    opened: dict[str, str] = {}
+    mutters = 0
+    calls_made = 0
+    elapsed = 0.0
+    budget_said = False
+
+    def open_page(path: str) -> str:
+        return _verb_open(path, opened, channel_name, generation_id)
+
+    def pass_(why: str = "") -> str:
+        # the one result that is her word, not the machinery's: her why,
+        # kept for the record; it never reaches the wire (the turn ends)
+        return Ended(why)
+
+    handlers: dict[str, Callable[..., str]] = {
+        desk_verbs.OPEN.name: open_page,
+        desk_verbs.PASS.name: pass_,
+    }
+
+    def ended(completion: Completion, **how: Any) -> Completion:
+        return replace(
+            completion,
+            calls_made=calls_made,
+            opened=tuple(opened),
+            mutters=mutters,
+            turn_elapsed=elapsed,
+            **how,
+        )
+
+    while True:
+        completion = await generate(
+            model=conversation.model,
+            prompt=prompt,
+            params={"temperature": TEMPERATURE, "top_p": TOP_P},
+        )
+        elapsed += completion.elapsed
+        calls = completion.calls
+        if not calls:
+            # her speech — or, once she has acted this turn, no words and no
+            # call is her quiet: the empty ending, her pass by ruling
+            if completion.is_empty and calls_made:
+                return ended(completion, via="empty")
+            return ended(completion)
+        passing = any(call.verb == desk_verbs.PASS.name for call in calls)
+        if budget_said and not passing:
+            raise TurnUnended(
+                f"the turn did not end within {calls_made} calls — she called "
+                f"{', '.join(call.verb for call in calls)} after the desk stopped",
+                elapsed,
+            )
+        calls_made += len(calls)
+        mutter = completion.text.strip()
+        if mutter:
+            mutters += 1
+            # the old sentinel said beside a call is a mutter by her ruling
+            # (words beside a call are never speech) — and a near-miss of
+            # the old way of passing, counted like the other near-misses
+            old_way = said_nothing(strip_speaker_tag(mutter)) or echoed_mark(mutter)
+            logging.info(
+                f"faebot mutters (kept, not posted): {mutter[:200]}"
+                + (" (the old sentinel, beside a call)" if old_way else "")
+            )
+            capture.record_faebot_mutter(
+                channel_name,
+                mutter,
+                generation_id=generation_id,
+                sentinel_beside_call=old_way,
+                **completion.capture_meta(),
+            )
+        cut = completion.finish_reason == "length"
+        if cut:
+            logging.warning(
+                f"faebot's answer hit the token cap with {len(calls)} call(s) in it"
+                " — none run; she is told"
+            )
+        results = []
+        # after the budget only pass is on offer, so only pass runs — a
+        # pass that arrives with company is honored and the company told
+        on_offer = (desk_verbs.PASS,) if budget_said else desk_verbs.VERBS
+        if budget_said and len(calls) > 1:
+            logging.info(
+                f"faebot passed with {len(calls) - 1} other call(s) beside it after "
+                "the desk stopped — the pass is honored, the rest not run"
+            )
+        for outcome in dispatch(
+            calls,
+            on_offer,
+            handlers,
+            cut=cut,
+            announce=lambda call: logging.info(f"faebot calls {call.shown()}"),
+        ):
+            logging.info(
+                "  ← "
+                + (
+                    outcome.result.splitlines()[0][:160]
+                    if outcome.result
+                    else "(quiet)"
+                )
+            )
+            if outcome.ended:
+                return ended(completion, via="verb", why=outcome.result)
+            results.append(tool_result_message(outcome.call.id, outcome.result))
+        prompt = prompt.after(history_message(completion.message), *results)
+        if calls_made >= MAX_CALLS_PER_TURN and not budget_said:
+            budget_said = True
+            logging.info(
+                f"faebot made {calls_made} calls in one turn — the desk stops here; "
+                "only pass stays on offer"
+            )
+            prompt = prompt.after(
+                user_message(
+                    f"{MACHINERY} {calls_made} calls this turn — the desk stops "
+                    "here. Answer chat in words, or pass."
+                )
+            ).offering(desk_verbs.PASS_ONLY)
+
+
+def _verb_open(
+    path: str, opened: dict[str, str], channel_name: str, generation_id: str | None
+) -> str:
+    """The open verb: a page of her diary, whole, open in front of her for
+    the rest of this wake; a row in her record, nothing in chat. A page
+    that isn't there is said, not guessed; the result says how full her
+    desk is, and she makes the call."""
+    if diary is None:
+        raise RuntimeError("no diary to open a page of — FAEBOT_DIARY_PATH is not set")
+    rel = desk_path(path)
+    if rel is None or not diary.has_page(rel):
+        logging.info(f"faebot asked for a page that isn't in her diary: {path}")
+        capture.record_faebot_open(
+            channel_name, path, False, generation_id=generation_id
+        )
+        return f"that page isn't in your diary: {path} — the roster lists what is"
+    if rel in opened:
+        return f"{rel} is already open in front of you"
+    text = diary.read_page(rel)
+    opened[rel] = text
+    on_desk = sum(len(page) for page in opened.values())
+    capture.record_faebot_open(
+        channel_name,
+        rel,
+        True,
+        chars=len(text),
+        open_pages=len(opened),
+        generation_id=generation_id,
+    )
+    pages = "page" if len(opened) == 1 else "pages"
+    return diary_file(rel, text) + (
+        f"\n(open in front of you for the rest of this wake — {len(opened)} {pages} "
+        f"open, {on_desk:,} characters of them on your desk)"
+    )
+
+
 # The answer channel coming back empty is a dropped payload (the model spoke
 # into `reasoning` and left `content` blank \u2014 kimi does this), so we roll once
 # more. Bounded: resampling cures stochastic drops, never structural failures.
+# Once she has acted this turn, an empty answer is her ending — she looked,
+# and chose nothing — not a drop to roll again (her ruling): one roll then.
 EMPTY_ROLLS = 2
 
 
@@ -750,7 +987,8 @@ async def generate(
     empty answer channel. A bare string is a desk in one hand (a test's)."""
     if isinstance(prompt, str):
         prompt = Prompt(system="", user=prompt)
-    for roll in range(1, EMPTY_ROLLS + 1):
+    rolls = 1 if prompt.turns else EMPTY_ROLLS
+    for roll in range(1, rolls + 1):
         try:
             completion = await _generate_once(
                 prompt=prompt,
@@ -783,7 +1021,7 @@ async def generate(
             return completion
         logging.warning(
             f"empty answer channel (reasoning had {len(completion.reasoning)} chars) "
-            f"\u2014 rolling again ({roll}/{EMPTY_ROLLS})"
+            f"\u2014 rolling again ({roll}/{rolls})"
         )
     return completion
 

@@ -15,7 +15,9 @@ import logging
 import re
 import uuid
 
-from faebot_core.cognition.body import Room, Stamped, clock_words, lay_body_desk
+from faebot_core.cognition.body import Room, Stamped, body_desk, clock_words
+from faebot_core.cognition.desk import Desk
+from faebot_core.cognition.verbs import Call, calls_in
 from faebot_core.diary import DiaryReader
 
 
@@ -114,6 +116,44 @@ _SILENCE_PATTERN = re.compile(r"^\W*nothing[\s-]+to[\s-]+say\b[\s\W]*", re.IGNOR
 # quiet*`, was a line in her voice — a line she could copy.)
 MACHINERY = "[the machinery]"
 PASS_MARK = "faebot was here and chose quiet"
+
+
+@dataclass(frozen=True)
+class Prompt:
+    """Her desk in two hands — one desk-shape for every body, B's (faebot's
+    ruling, 2026-10-09): `system` is her frame (hers, addressing her), `user`
+    is the machinery's furniture with her pen line at its end. `text` is the
+    same desk joined, for the record (the capture row, the dashboard, the
+    dry run).
+
+    Behind the desk, `turns`: the wire as her turn grows — her own answers
+    as received, the machinery's results in the tool slot, a labeled line
+    from the machinery — and `tools`, the verbs on offer. The desk is the
+    stable prefix (the provider's cache holds it); a turn grows behind it."""
+
+    system: str
+    user: str
+    turns: tuple[dict[str, Any], ...] = ()
+    tools: tuple[dict[str, Any], ...] = ()
+
+    @property
+    def text(self) -> str:
+        return (self.system + "\n\n" + self.user) if self.system else self.user
+
+    def messages(self) -> list[dict[str, Any]]:
+        turns: list[dict[str, Any]] = (
+            [{"role": "system", "content": self.system}] if self.system else []
+        )
+        return turns + [{"role": "user", "content": self.user}] + list(self.turns)
+
+    def after(self, *turns: dict[str, Any]) -> "Prompt":
+        """The same desk with more of the turn behind it."""
+        return replace(self, turns=self.turns + tuple(turns))
+
+    def offering(self, tools: tuple[dict[str, Any], ...]) -> "Prompt":
+        """The same desk with a different set of verbs on offer."""
+        return replace(self, tools=tuple(tools))
+
 
 # Her diary, where her desk is laid from (the house walk, 2026-10-07): the
 # body sets it at start from FAEBOT_DIARY_PATH (DiaryReader.from_environment)
@@ -214,6 +254,9 @@ class Completion:
 
     text: str
     reasoning: str = ""
+    # The model's own message as the wire returned it — what goes back to it
+    # whole on the next call of a turn, and where its calls are read from.
+    message: dict[str, Any] = field(default_factory=dict)
     elapsed: float = 0.0
     finish_reason: str = ""
     model: str = ""
@@ -228,10 +271,17 @@ class Completion:
     prompt: str = ""
 
     @property
+    def calls(self) -> list[Call]:
+        """The verbs she called in this answer, in order."""
+        return calls_in(self.message)
+
+    @property
     def is_empty(self) -> bool:
-        """An empty answer channel is a DROPPED PAYLOAD, never chosen silence —
-        reasoning models cause it by answering into `reasoning` instead."""
-        return not self.text.strip()
+        """No words and no call. On a fresh desk that is a DROPPED PAYLOAD,
+        never chosen silence — reasoning models cause it by answering into
+        `reasoning` instead; after she has acted this turn it is her quiet
+        (the caller knows which)."""
+        return not self.text.strip() and not self.calls
 
     @property
     def passed(self) -> bool:
@@ -241,7 +291,7 @@ class Completion:
         The machinery's pass mark echoed back whole is taken as the pass she
         meant (see `echoed`)."""
         stripped = strip_speaker_tag(self.text)
-        return said_nothing(stripped) or echoed_mark(stripped)
+        return (said_nothing(stripped) or echoed_mark(stripped)) and not self.calls
 
     @property
     def echoed(self) -> bool:
@@ -354,7 +404,7 @@ def permalog(log_message: str):
         f.write(log_message)
 
 
-def lay_desk(
+def desk_for(
     conversation: Conversation,
     channel_name: str,
     stream_title: str,
@@ -363,13 +413,14 @@ def lay_desk(
     live: bool | None = None,
     called: str | None = None,
     now: datetime.datetime | None = None,
-) -> str:
-    """Her desk, laid by core from her diary: the frame (hers), the stamped
-    facts (the machinery's), self/ whole, the commons digested, the roster,
-    this room with its window, the clock. One room, no wings: the stream
-    chat is the only place the twitch-me is. The old hand-written system
-    prompt is gone with this — nothing here is said in her voice but her
-    own files."""
+) -> Desk:
+    """Her desk, unlaid, by core from her diary: the frame (hers), the
+    stamped facts (the machinery's), self/ whole, the commons digested, the
+    roster, this room with its window, the clock. One room, no wings: the
+    stream chat is the only place the twitch-me is. The old hand-written
+    system prompt is gone with this — nothing here is said in her voice but
+    her own files. `.frame` and `.furniture()` are the two hands the wire
+    takes; `lay_desk` is the same desk as one text."""
     if diary is None:
         raise RuntimeError(
             "no diary to lay the desk from — FAEBOT_DIARY_PATH is not set"
@@ -400,9 +451,31 @@ def lay_desk(
         ),
     )
     when = now if now is not None else datetime.datetime.now().astimezone()
-    return lay_body_desk(
-        diary, BODY, [room], stamped, clock_words(when), by_house=False
-    )
+    return body_desk(diary, BODY, [room], stamped, clock_words(when), by_house=False)
+
+
+def lay_desk(
+    conversation: Conversation,
+    channel_name: str,
+    stream_title: str,
+    game_name: str,
+    emotes: list[str],
+    live: bool | None = None,
+    called: str | None = None,
+    now: datetime.datetime | None = None,
+) -> str:
+    """`desk_for(...)` as one text — the frame, then the furniture — for the
+    record and the dry run; the wire takes the two hands apart."""
+    return desk_for(
+        conversation,
+        channel_name,
+        stream_title,
+        game_name,
+        emotes,
+        live=live,
+        called=called,
+        now=now,
+    ).lay()
 
 
 # Whisper is primed with our names (`initial_prompt`) so it spells them right,
@@ -541,14 +614,17 @@ async def generate_response(
         )
         conversation.chatlog = conversation.chatlog[-floor:]
 
-    # The whole desk, then the pen: one user message (fae, 09-16: the
-    # sitting sends the desk as one message, "so twitch does the same and
-    # the old system message goes"). A desk that will not lay raises, and
-    # the body records the error — never a silence that looks chosen.
+    # The desk in two hands — her frame as the system turn, the machinery's
+    # furniture as the user turn (one desk-shape for every body, B's;
+    # faebot's ruling 2026-10-09; until then the whole desk went as one
+    # user message, fae's 09-16 lean) — then the pen: the last line of the
+    # user turn hands faebot the pen in the window's own grammar. A desk
+    # that will not lay raises, and the body records the error — never a
+    # silence that looks chosen.
     if generation_id is None:
         generation_id = str(uuid.uuid4())
     try:
-        desk = lay_desk(
+        desk = desk_for(
             conversation,
             channel_name,
             stream_title,
@@ -569,8 +645,8 @@ async def generate_response(
             },
         )
         raise
-    prompt = desk + "faebot:"
-    logging.debug(f"model: {conversation.model}\nprompt: \n{prompt}")
+    prompt = Prompt(system=desk.frame, user=desk.furniture() + "faebot:")
+    logging.debug(f"model: {conversation.model}\nprompt: \n{prompt.text}")
 
     params = {"temperature": TEMPERATURE, "top_p": TOP_P}
 
@@ -592,7 +668,7 @@ async def generate_response(
             "trigger_type": trigger_type,
             "trigger": trigger_text,
             "model": conversation.model,
-            "prompt": prompt,
+            "prompt": prompt.text,
             "params": params,
         },
     )
@@ -614,7 +690,7 @@ async def generate_response(
             },
         )
         raise
-    completion = replace(completion, prompt=prompt)
+    completion = replace(completion, prompt=prompt.text)
 
     if completion.passed:
         # Chosen silence. The reason (if fae gave one) is kept for the capture
@@ -666,12 +742,14 @@ EMPTY_ROLLS = 2
 
 
 async def generate(
-    prompt: str = "",
+    prompt: "Prompt | str" = "",
     model: str = MODEL,
     params: dict | None = None,
 ) -> Completion:
     """Generate a Completion with the OpenRouter API, rolling again on an
-    empty answer channel."""
+    empty answer channel. A bare string is a desk in one hand (a test's)."""
+    if isinstance(prompt, str):
+        prompt = Prompt(system="", user=prompt)
     for roll in range(1, EMPTY_ROLLS + 1):
         try:
             completion = await _generate_once(
@@ -721,7 +799,7 @@ def _body_error_code(result: object) -> int | None:
 
 
 async def _generate_once(
-    prompt: str,
+    prompt: Prompt,
     model: str,
     params: dict | None,
     providers: tuple[str, ...] = PROVIDERS,
@@ -735,11 +813,6 @@ async def _generate_once(
         params = {"temperature": TEMPERATURE, "top_p": TOP_P}
 
     session = await get_session()
-
-    # The desk is one user message and there is no system message: the
-    # frame at the top of the desk is hers, from her diary, not the
-    # machinery's instruction to her.
-    messages = [{"role": "user", "content": prompt}]
 
     started = time.monotonic()
     try:
@@ -755,7 +828,8 @@ async def _generate_once(
             },
             json={
                 "model": model,
-                "messages": messages,
+                "messages": prompt.messages(),
+                **({"tools": list(prompt.tools)} if prompt.tools else {}),
                 "temperature": params.get("temperature", TEMPERATURE),
                 "top_p": params.get("top_p", TOP_P),
                 # Answer budget plus the reasoning's own room on top.
@@ -790,9 +864,15 @@ async def _generate_once(
                     status=_body_error_code(result),
                 ) from None
             message = choice.get("message") or {}
+            text = str(message.get("content") or "")
             return Completion(
-                text=str(message.get("content") or ""),
+                text=text,
                 reasoning=str(message.get("reasoning") or ""),
+                message=(
+                    dict(message)
+                    if isinstance(message, dict) and message
+                    else {"role": "assistant", "content": text}
+                ),
                 elapsed=elapsed,
                 finish_reason=str(choice.get("finish_reason") or ""),
                 model=str(result.get("model") or model),

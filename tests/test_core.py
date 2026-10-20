@@ -669,26 +669,30 @@ class TestGenerate:
 
 class TestGenerateResponse:
     @pytest.mark.asyncio
-    async def test_the_wire_carries_the_desk_as_one_user_message(self, conversation):
-        """No system message: the frame at the top of the desk is hers."""
+    async def test_the_wire_carries_the_desk_in_two_hands(self, conversation):
+        """Her frame as the system turn, the machinery's furniture as the
+        user turn, the pen last (one desk-shape for every body, B's)."""
         conversation.chatlog.append("viewer: hello faebot!")
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 payload={"choices": [{"message": {"content": "hi!"}}]},
             )
-            await core.generate_response("testchannel", called="faebot_01")
+            result = await core.generate_response("testchannel", called="faebot_01")
             request = list(mocked.requests.values())[0][0]
         messages = request.kwargs["json"]["messages"]
-        assert [m["role"] for m in messages] == ["user"]
-        desk = messages[0]["content"]
-        assert desk.startswith("↳ from your diary, frames/preamble.md:")
+        assert [m["role"] for m in messages] == ["system", "user"]
+        frame, furniture = messages[0]["content"], messages[1]["content"]
+        assert frame.startswith("↳ from your diary, frames/preamble.md:")
+        assert "frames/twitch.md" in frame
         assert (
             "- in this house you are called faebot_01 (the account @mentions reach)"
-            in desk
+            in furniture
         )
-        assert "viewer: hello faebot!" in desk
-        assert desk.endswith("faebot:")
+        assert "viewer: hello faebot!" in furniture
+        assert furniture.endswith("faebot:")
+        # the record keeps the desk as one text, the frame first
+        assert result.prompt == frame + "\n\n" + furniture
         await core.close_session()
 
     @pytest.mark.asyncio

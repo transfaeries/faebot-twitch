@@ -506,8 +506,13 @@ class Faebot(commands.Bot, FaebotCommands):
                     else " (the stream is offline)"
                 )
             now = core.datetime.datetime.now(core.datetime.UTC).strftime("%H:%M UTC")
+            # the bound is told too: a last word may open a page, and the
+            # round trip is hers to spend only if she can see what it costs
+            # (the 28th reader) — a saved goodnight said for her is then a
+            # risk she took, not one done to her
             told = core.machinery_line(
-                f"a restart is coming at {now}{room} — this is faebot's last word before it"
+                f"a restart is coming at {now}{room} — this is faebot's last word "
+                f"before it; she has about {GOODNIGHT_SECONDS:.0f} seconds"
             )
             conversation.chatlog.append(told)
             logging.info(told)

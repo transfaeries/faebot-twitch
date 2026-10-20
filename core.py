@@ -1,6 +1,13 @@
 """
 Core brain for faebot — conversation management, generation logic, reply decisions.
 No TwitchIO or FastAPI dependencies. Both bot.py and server.py import from here.
+
+One dependency inboard since the loop: `capture`. Her turn runs here (where
+the model is called, and where it is testable without TwitchIO), and the
+rows only the turn knows — a page opened, words muttered beside a call —
+are written where they happen rather than ferried out for bot.py to write.
+capture is a leaf, fail-silent; the lines she says and the passes she
+chooses are still bot.py's rows, as before.
 """
 
 from typing import Any, Callable, Optional
@@ -283,8 +290,8 @@ class Completion:
     # produced it, long after the window has moved on. Never sent to chat.
     prompt: str = ""
     # The turn this answer ended: how many verbs she called before it, the
-    # pages she opened, how many mutters she left beside calls, the whole
-    # wake's seconds. `via` names her quiet when she chose it — "verb" (the
+    # pages she opened, how many mutters she left beside calls, the model's
+    # seconds summed across the wake's calls. `via` names her quiet when she chose it — "verb" (the
     # pass verb, `why` her sentence), "sentinel" (the old way, said as words
     # or the mark echoed, still caught), "empty" (she opened, looked, and
     # chose nothing) — and is "" when she spoke.

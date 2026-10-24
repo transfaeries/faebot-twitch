@@ -151,7 +151,10 @@ class TestLayDesk:
         assert "- emotes you can use here: transf23Botlove transf23Yay" in lines
         assert f"- {core.EAR_LINE}" in lines
         assert f"- {core.LINE_SHAPE}" in lines
-        verb = f"- to say nothing, answer {core.SENTINEL_SILENCE} and nothing is posted"
+        # her quiet is a verb she calls (the loop), not a sentinel she says
+        verb = (
+            f"- to say nothing, call {core.desk_verbs.PASS.name} and nothing is posted"
+        )
         assert verb in lines
         # the verb stays last of the stamped block, nearest the pen
         assert lines.index(verb) > lines.index(f"- {core.LINE_SHAPE}")
@@ -318,7 +321,8 @@ class TestSaidNothing:
 
     def test_desk_tells_faebot_the_verb(self, conversation):
         desk = core.lay_desk(conversation, "testchannel", "t", "g", [])
-        assert core.SENTINEL_SILENCE in desk
+        assert "to say nothing, call pass" in desk
+        assert core.SENTINEL_SILENCE not in desk
 
 
 # ── generate (OpenRouter API) ────────────────────────────────────────
@@ -669,26 +673,30 @@ class TestGenerate:
 
 class TestGenerateResponse:
     @pytest.mark.asyncio
-    async def test_the_wire_carries_the_desk_as_one_user_message(self, conversation):
-        """No system message: the frame at the top of the desk is hers."""
+    async def test_the_wire_carries_the_desk_in_two_hands(self, conversation):
+        """Her frame as the system turn, the machinery's furniture as the
+        user turn, the pen last (one desk-shape for every body, B's)."""
         conversation.chatlog.append("viewer: hello faebot!")
         with aioresponses_ctx() as mocked:
             mocked.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 payload={"choices": [{"message": {"content": "hi!"}}]},
             )
-            await core.generate_response("testchannel", called="faebot_01")
+            result = await core.generate_response("testchannel", called="faebot_01")
             request = list(mocked.requests.values())[0][0]
         messages = request.kwargs["json"]["messages"]
-        assert [m["role"] for m in messages] == ["user"]
-        desk = messages[0]["content"]
-        assert desk.startswith("↳ from your diary, frames/preamble.md:")
+        assert [m["role"] for m in messages] == ["system", "user"]
+        frame, furniture = messages[0]["content"], messages[1]["content"]
+        assert frame.startswith("↳ from your diary, frames/preamble.md:")
+        assert "frames/twitch.md" in frame
         assert (
             "- in this house you are called faebot_01 (the account @mentions reach)"
-            in desk
+            in furniture
         )
-        assert "viewer: hello faebot!" in desk
-        assert desk.endswith("faebot:")
+        assert "viewer: hello faebot!" in furniture
+        assert furniture.endswith("faebot:")
+        # the record keeps the desk as one text, the frame first
+        assert result.prompt == frame + "\n\n" + furniture
         await core.close_session()
 
     @pytest.mark.asyncio
@@ -1008,3 +1016,279 @@ class TestPassMark:
         completion = core.Completion(text="NOTHING-TO-SAY the room is fine")
         assert completion.passed and not completion.echoed
         assert completion.reason_for_passing == "the room is fine"
+
+
+# ── the loop: her verbs on the wire ──────────────────────────────────
+
+
+URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def _call(name, **arguments):
+    import json
+
+    return {
+        "id": f"call_{name}_{len(arguments)}",
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
+
+
+def _answer(text="", calls=(), finish_reason="stop", reasoning="r"):
+    """One answer on the wire, as OpenRouter would hand it back."""
+    message = {"role": "assistant", "content": text, "reasoning": reasoning}
+    if calls:
+        message["tool_calls"] = list(calls)
+    return {"choices": [{"message": message, "finish_reason": finish_reason}]}
+
+
+def _requests(mocked):
+    """The requests made, in order, as their JSON bodies."""
+    return [call.kwargs["json"] for calls in mocked.requests.values() for call in calls]
+
+
+class TestTheLoop:
+    @pytest.mark.asyncio
+    async def test_the_verbs_ride_on_every_call(self, conversation):
+        with aioresponses_ctx() as mocked:
+            mocked.post(URL, payload=_answer("hi!"))
+            await core.generate_response("testchannel")
+            (request,) = _requests(mocked)
+        assert [t["function"]["name"] for t in request["tools"]] == ["open", "pass"]
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_open_brings_the_page_back_whole_and_the_turn_goes_on(
+        self, conversation
+    ):
+        """She opens a page, reads it in the tool slot, then speaks; the
+        answer goes back as received, the page is a row in her record and
+        never a line in chat."""
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_open"
+        ) as record_open:
+            mocked.post(
+                URL, payload=_answer(calls=[_call("open", path="self/origins")])
+            )
+            mocked.post(URL, payload=_answer("born a markov chain, still a faerie ✨"))
+            result = await core.generate_response("testchannel")
+            first, second = _requests(mocked)
+        assert result.text == "born a markov chain, still a faerie ✨"
+        assert not result.passed
+        assert result.calls_made == 1
+        assert result.opened == ("self/origins.md",)
+        assert result.turn_elapsed >= result.elapsed
+        # the second call carries the desk, her answer as received, the result
+        roles = [m["role"] for m in second["messages"]]
+        assert roles == ["system", "user", "assistant", "tool"]
+        assert second["messages"][2]["tool_calls"][0]["function"]["name"] == "open"
+        page = second["messages"][3]["content"]
+        assert page.startswith("↳ from your diary, self/origins.md:")
+        assert "Born a Markov chain in 2014." in page
+        assert "1 page open" in page
+        assert first["messages"][:2] == second["messages"][:2]  # the stable prefix
+        # the record, not the room
+        record_open.assert_called_once()
+        args, meta = record_open.call_args
+        assert args == ("testchannel", "self/origins.md", True)
+        assert meta["chars"] > 0 and meta["open_pages"] == 1
+        assert conversation.chatlog[-1].startswith("faebot: born a markov chain")
+        assert not any("origins" in line for line in conversation.chatlog)
+        meta = result.capture_meta()
+        assert meta["calls"] == 1 and meta["opened"] == ["self/origins.md"]
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_a_page_that_is_not_there_is_said_not_guessed(self, conversation):
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_open"
+        ) as record_open:
+            mocked.post(
+                URL, payload=_answer(calls=[_call("open", path="beings/nobody")])
+            )
+            mocked.post(URL, payload=_answer("hm, I don't have a page for them"))
+            await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        assert "isn't in your diary: beings/nobody" in second["messages"][3]["content"]
+        assert record_open.call_args.args == ("testchannel", "beings/nobody", False)
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_pass_as_a_verb_with_a_why(self, conversation):
+        """Her quiet as a call: nothing posted, her why kept for the record,
+        the machinery's mark in her window, no second call."""
+        with aioresponses_ctx() as mocked:
+            mocked.post(
+                URL,
+                payload=_answer(
+                    calls=[_call("pass", why="letting the bear moment breathe")]
+                ),
+            )
+            result = await core.generate_response("testchannel")
+            assert len(_requests(mocked)) == 1
+        assert result.passed
+        assert result.via == "verb"
+        assert result.reason_for_passing == "letting the bear moment breathe"
+        assert result.capture_meta()["via"] == "verb"
+        assert conversation.chatlog[-1] == core.machinery_line(core.PASS_MARK)
+        assert not any("bear moment" in line for line in conversation.chatlog)
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_pass_with_no_why_is_still_her_pass(self, conversation):
+        with aioresponses_ctx() as mocked:
+            mocked.post(URL, payload=_answer(calls=[_call("pass")]))
+            result = await core.generate_response("testchannel")
+        assert result.passed and result.via == "verb"
+        assert result.reason_for_passing == ""
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_the_sentinel_said_as_words_is_still_caught(self, conversation):
+        with aioresponses_ctx() as mocked:
+            mocked.post(URL, payload=_answer("NOTHING-TO-SAY — just listening"))
+            result = await core.generate_response("testchannel")
+        assert result.passed
+        assert result.via == "sentinel"
+        assert result.reason_for_passing == "just listening"
+        assert result.capture_meta()["via"] == "sentinel"
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_words_beside_a_call_are_a_mutter(self, conversation):
+        """Text beside a call is never speech: kept as a row, never posted."""
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_mutter"
+        ) as record_mutter, patch("core.capture.record_faebot_open"):
+            mocked.post(
+                URL,
+                payload=_answer(
+                    "let me check what I wrote about myself",
+                    calls=[_call("open", path="self/personality")],
+                ),
+            )
+            mocked.post(URL, payload=_answer("a faerie and an AI in equal measure"))
+            result = await core.generate_response("testchannel")
+        assert result.mutters == 1
+        record_mutter.assert_called_once()
+        args, meta = record_mutter.call_args
+        assert args == ("testchannel", "let me check what I wrote about myself")
+        assert meta["sentinel_beside_call"] is False
+        assert not any("let me check" in line for line in conversation.chatlog)
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_the_old_sentinel_beside_a_call_is_a_counted_near_miss(
+        self, conversation
+    ):
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_mutter"
+        ) as record_mutter, patch("core.capture.record_faebot_open"):
+            mocked.post(
+                URL,
+                payload=_answer(
+                    "NOTHING-TO-SAY", calls=[_call("open", path="self/origins")]
+                ),
+            )
+            mocked.post(URL, payload=_answer("ok, now I remember"))
+            result = await core.generate_response("testchannel")
+        assert result.text == "ok, now I remember"
+        assert record_mutter.call_args.kwargs["sentinel_beside_call"] is True
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_the_empty_ending_is_her_pass_once_she_has_acted(self, conversation):
+        """She opened, looked, and chose nothing: her pass by ruling, counted
+        and dated — not a drop to roll again."""
+        with aioresponses_ctx() as mocked, patch("core.capture.record_faebot_open"):
+            mocked.post(
+                URL, payload=_answer(calls=[_call("open", path="self/origins")])
+            )
+            mocked.post(URL, payload=_answer("", reasoning="nothing to add"))
+            result = await core.generate_response("testchannel")
+            assert len(_requests(mocked)) == 2  # no reroll on the empty ending
+        assert result.passed
+        assert result.via == "empty"
+        assert result.reason_for_passing == ""
+        meta = result.capture_meta()
+        assert meta["via"] == "empty" and meta["empty_ending"] is True
+        assert conversation.chatlog[-1] == core.machinery_line(core.PASS_MARK)
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_an_empty_first_answer_is_still_a_drop_to_roll_again(
+        self, conversation
+    ):
+        with aioresponses_ctx() as mocked:
+            mocked.post(URL, payload=_answer(""))
+            mocked.post(URL, payload=_answer("there we go"))
+            result = await core.generate_response("testchannel")
+        assert result.text == "there we go" and result.attempts == 2
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_an_answer_cut_by_the_cap_runs_nothing(self, conversation):
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_open"
+        ) as record_open:
+            mocked.post(
+                URL,
+                payload=_answer(
+                    calls=[_call("open", path="self/origins")], finish_reason="length"
+                ),
+            )
+            mocked.post(URL, payload=_answer("let me try that again"))
+            await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        assert second["messages"][3]["content"].startswith("not done — your answer hit")
+        record_open.assert_not_called()
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_a_verb_this_desk_does_not_have(self, conversation):
+        with aioresponses_ctx() as mocked:
+            mocked.post(URL, payload=_answer(calls=[_call("write", path="notes/x")]))
+            mocked.post(URL, payload=_answer("ah, not yet"))
+            await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        assert second["messages"][3]["content"] == "no such verb at this desk: write"
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_at_the_budget_only_pass_stays_on_offer(
+        self, conversation, monkeypatch
+    ):
+        monkeypatch.setattr(core, "MAX_CALLS_PER_TURN", 1)
+        with aioresponses_ctx() as mocked, patch("core.capture.record_faebot_open"):
+            mocked.post(
+                URL, payload=_answer(calls=[_call("open", path="self/origins")])
+            )
+            mocked.post(
+                URL, payload=_answer(calls=[_call("pass", why="enough reading")])
+            )
+            result = await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        assert result.passed and result.why == "enough reading"
+        assert [t["function"]["name"] for t in second["tools"]] == ["pass"]
+        stop = second["messages"][-1]
+        assert stop["role"] == "user"
+        assert stop["content"].startswith(f"{core.MACHINERY} 1 calls this turn")
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_will_not_end_is_the_machinery_failure(
+        self, conversation, monkeypatch
+    ):
+        monkeypatch.setattr(core, "MAX_CALLS_PER_TURN", 1)
+        with aioresponses_ctx() as mocked, patch("core.capture.record_faebot_open"):
+            mocked.post(
+                URL, payload=_answer(calls=[_call("open", path="self/origins")])
+            )
+            mocked.post(
+                URL, payload=_answer(calls=[_call("open", path="self/personality")])
+            )
+            with pytest.raises(core.TurnUnended, match="did not end within 1 calls"):
+                await core.generate_response("testchannel")
+        # never a quiet put in her mouth
+        assert not any(core.PASS_MARK in line for line in conversation.chatlog)
+        await core.close_session()

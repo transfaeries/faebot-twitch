@@ -179,6 +179,31 @@ def record_faebot_pass(channel_name: str, reason: str, **meta) -> None:
         logging.debug(f"capture_faebot_pass failed: {type(error).__name__}: {error}")
 
 
+def record_faebot_open(channel_name: str, path: str, found: bool, **meta) -> None:
+    """faebot opening a page of her diary during a turn — the open verb. A
+    real act of hers (she read before answering), witnessed into her days
+    by the transducer; invisible to chat. `found` says whether the page
+    exists; `chars` and `open_pages` ride in `meta` when it does."""
+    if not is_enabled():
+        return
+    try:
+        record("faebot_open", channel=channel_name, path=path, found=found, **meta)
+    except Exception as error:
+        logging.debug(f"capture_faebot_open failed: {type(error).__name__}: {error}")
+
+
+def record_faebot_mutter(channel_name: str, text: str, **meta) -> None:
+    """Words she wrote beside a call — a mutter: hers, kept, never posted
+    (her ruling: text beside a tool call is a draft, not speech, and is
+    never graded)."""
+    if not is_enabled():
+        return
+    try:
+        record("faebot_mutter", channel=channel_name, text=text, **meta)
+    except Exception as error:
+        logging.debug(f"capture_faebot_mutter failed: {type(error).__name__}: {error}")
+
+
 def record_faebot_error(channel_name: str, error: str, **meta) -> None:
     """Record a generation that FAILED after faebot was asked — the service
     timed out, refused, or was unreachable, and nothing was posted. Not

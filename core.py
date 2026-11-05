@@ -186,9 +186,10 @@ BODY = "twitch"
 
 
 def clock() -> datetime.datetime:
-    """The write floor's clock — the trace row's `time`. A seam the tests
-    may hold still."""
-    return datetime.datetime.now().astimezone()
+    """The write floor's clock — the trace row's `time`, in UTC like the
+    discord body's rows (one trace file, one notation — the 32nd reader). A
+    seam the tests may hold still."""
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 def offered() -> tuple[tuple[Any, ...], tuple[dict[str, Any], ...]]:

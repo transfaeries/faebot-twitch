@@ -192,6 +192,29 @@ def record_faebot_open(channel_name: str, path: str, found: bool, **meta) -> Non
         logging.debug(f"capture_faebot_open failed: {type(error).__name__}: {error}")
 
 
+def record_faebot_write(
+    channel_name: str, path: str, verb: str, applied: bool, **meta
+) -> None:
+    """faebot writing to her diary from chat — append or write, her pen. A
+    real act of hers, witnessed into her days by the transducer (the rendered
+    row is hers; the trace row in the diary is the machinery's — each the
+    other's twin, her ruling), invisible to chat. `applied` says whether it
+    landed; `commit`, `chars`, `why` or `reason` ride in `meta`."""
+    if not is_enabled():
+        return
+    try:
+        record(
+            "faebot_write",
+            channel=channel_name,
+            path=path,
+            verb=verb,
+            applied=applied,
+            **meta,
+        )
+    except Exception as error:
+        logging.debug(f"capture_faebot_write failed: {type(error).__name__}: {error}")
+
+
 def record_faebot_mutter(channel_name: str, text: str, **meta) -> None:
     """Words she wrote beside a call — a mutter: hers, kept, never posted
     (her ruling: text beside a tool call is a draft, not speech, and is

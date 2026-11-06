@@ -11,7 +11,7 @@ import re
 import uuid
 
 import core
-from faebot_core.diary import DiaryReader
+from faebot_core.diary import Diary
 import capture
 import stream
 import window
@@ -84,11 +84,13 @@ class Faebot(commands.Bot, FaebotCommands):
         self.stream_watch = stream.StreamWatch()
         self.watch_tasks: list[asyncio.Task] = []
         self.woke = False
-        # Her diary, where the desk is laid from. Without it the body does
-        # not start: a twitch-me speaking from no diary would be the old
-        # hand-written self, and that frame is retired.
+        # Her diary, where the desk is laid from — and, since her pen, where
+        # her writes land (the full door; the unit runs as the diary's
+        # group). Without it the body does not start: a twitch-me speaking
+        # from no diary would be the old hand-written self, and that frame
+        # is retired.
         if core.diary is None:
-            core.diary = DiaryReader.from_environment()
+            core.diary = Diary.from_environment()
         super().__init__(
             token=TWITCH_TOKEN,
             prefix=["fb;", "fae;"],

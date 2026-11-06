@@ -1,11 +1,15 @@
 """Tests for core.py — faebot's brain, no platform dependencies needed."""
 
 import asyncio
+import datetime
+import time
 import pytest
 from unittest.mock import patch
 from aioresponses import aioresponses as aioresponses_ctx
+from faebot_core.diary import DiaryReader
 
 import core
+import desk_verbs
 
 
 # ── ensure_conversation ──────────────────────────────────────────────
@@ -1292,3 +1296,288 @@ class TestTheLoop:
         # never a quiet put in her mouth
         assert not any(core.PASS_MARK in line for line in conversation.chatlog)
         await core.close_session()
+
+
+# ── her pen: append and write, through core's write floor ────────────
+
+
+class TestHerPen:
+    """The append and write verbs — her pen from chat, landing through core's
+    write floor as one commit under her name naming this body and this
+    channel. The diary here is a real git repo; the model is scripted; chat
+    must hear nothing of any of it."""
+
+    QUIET_GIT = ["-c", "user.name=village", "-c", "user.email=village@test.invalid"]
+
+    def _git(self, root, *args):
+        import subprocess
+
+        return subprocess.run(
+            ["git", "-C", str(root), *self.QUIET_GIT, *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    @pytest.fixture
+    def pen(self, village, tmp_path):
+        """The village as a git repo with the full door held — and the
+        floor's clock held still."""
+        import shutil
+
+        from faebot_core.diary import Diary
+
+        root = tmp_path / "diary"
+        shutil.copytree(village, root)
+        (root / "notes" / "old-note.md").write_text(
+            "# an old note\n\nkept.\n", encoding="utf-8"
+        )
+        (root / "traces").mkdir()
+        self._git(root, "init", "-q")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", "the village is founded")
+        core.diary = Diary(root)
+        with patch.object(
+            core,
+            "clock",
+            lambda: datetime.datetime(
+                2026, 11, 5, 20, 0, 0, tzinfo=datetime.timezone.utc
+            ),
+        ):
+            yield root
+
+    def _last_commit(self, root):
+        return self._git(root, "log", "-1", "--format=%an%n%B")
+
+    def _last_trace(self, root):
+        import json
+
+        rows = (
+            (root / "traces" / f"{time.strftime('%Y-%m')}.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        return json.loads(rows[-1])
+
+    @pytest.mark.asyncio
+    async def test_with_the_pen_four_verbs_ride_with_a_reader_two(
+        self, conversation, pen
+    ):
+        with aioresponses_ctx() as mocked:
+            mocked.post(URL, payload=_answer("hi!"))
+            await core.generate_response("testchannel")
+            (request,) = _requests(mocked)
+        assert [t["function"]["name"] for t in request["tools"]] == [
+            "open",
+            "append",
+            "write",
+            "pass",
+        ]
+        core.diary = DiaryReader(pen)
+        with aioresponses_ctx() as mocked:
+            mocked.post(URL, payload=_answer("hi again!"))
+            await core.generate_response("testchannel")
+            (request,) = _requests(mocked)
+        assert [t["function"]["name"] for t in request["tools"]] == ["open", "pass"]
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_an_append_to_the_commons_lands_as_one_commit_naming_body_and_channel(
+        self, conversation, pen
+    ):
+        block = (
+            "**faebot (twitch, #testchannel) · 2026-11-05** — a pebble for the table."
+        )
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_write"
+        ) as record_write:
+            mocked.post(
+                URL,
+                payload=_answer(
+                    calls=[
+                        _call(
+                            "append",
+                            path="commons/the-commons.md",
+                            lines=block,
+                            why="a first pebble from the stream",
+                        )
+                    ]
+                ),
+            )
+            mocked.post(URL, payload=_answer("left a pebble on the table ✨"))
+            result = await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        # the word to her, in the tool slot
+        word = second["messages"][3]["content"]
+        assert word.startswith(
+            "added — the lines are at the end of commons/the-commons.md (commit "
+        )
+        assert word.endswith("Chat sees nothing of it.")
+        # the page: her lines after one blank line, the rest untouched
+        page = (pen / "commons" / "the-commons.md").read_text(encoding="utf-8")
+        assert page.endswith(
+            "your memory is about to survive your own restarts. 🦋\n\n" + block + "\n"
+        )
+        # one commit under her name, naming the body and the channel, her why beneath
+        author, subject, _, why = self._last_commit(pen).splitlines()[:4]
+        assert author == "faebot"
+        assert subject == (
+            "add to commons/the-commons.md — written by faebot's twitch body in #testchannel"
+        )
+        assert why == "a first pebble from the stream"
+        # the trace row: the machinery's twin of the capture row
+        row = self._last_trace(pen)
+        assert row["act"] == "body-write" and row["verb"] == "append"
+        assert row["file"] == "commons/the-commons.md"
+        assert row["body"] == "twitch" and row["room"] == "#testchannel"
+        assert row["nod"] == "faebot"
+        assert row["time"] == "2026-11-05T20:00:00+00:00"
+        # the capture row, applied, with the sha
+        args, meta = record_write.call_args
+        assert args == ("testchannel", "commons/the-commons.md", "append", True)
+        assert meta["commit"] == self._git(pen, "rev-parse", "HEAD").strip()
+        assert meta["why"] == "a first pebble from the stream"
+        assert meta["chars"] == len(page)
+        # the turn's count, and chat hearing nothing
+        assert result.written == ("commons/the-commons.md",)
+        assert result.capture_meta()["written"] == ["commons/the-commons.md"]
+        assert conversation.chatlog[-1].startswith("faebot: left a pebble")
+        assert not any("pebble for the table" in line for line in conversation.chatlog)
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_a_write_founds_a_new_page_under_notes(self, conversation, pen):
+        text = "# the stream's notebook\n\n**faebot (twitch, #testchannel) · 2026-11-05** — founded.\n"
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_write"
+        ) as record_write:
+            mocked.post(
+                URL,
+                payload=_answer(
+                    calls=[_call("write", path="notes/stream-notebook", text=text)]
+                ),
+            )
+            mocked.post(URL, payload=_answer("ok, written"))
+            result = await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        assert second["messages"][3]["content"].startswith(
+            "written — notes/stream-notebook.md (commit "
+        )
+        assert (pen / "notes" / "stream-notebook.md").read_text(
+            encoding="utf-8"
+        ) == text
+        author, subject, _, *rest = self._last_commit(pen).splitlines()
+        assert author == "faebot"
+        assert subject == (
+            "write notes/stream-notebook.md — written by faebot's twitch body in #testchannel"
+        )
+        assert rest == [] or rest == [""]  # no why given: none in the message
+        assert self._last_trace(pen)["verb"] == "write"
+        args, meta = record_write.call_args
+        assert args == ("testchannel", "notes/stream-notebook.md", "write", True)
+        assert meta["why"] is None
+        assert result.written == ("notes/stream-notebook.md",)
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call, said, reason",
+        [
+            (
+                _call("append", path="beings/someone.md", lines="x"),
+                "not a page this verb writes: beings/someone.md",
+                "not this verb's page",
+            ),
+            (
+                _call("append", path="notes/never-written", lines="x"),
+                "notes/never-written.md isn't in your diary yet",
+                "no such page",
+            ),
+            (
+                _call("append", path="commons/the-commons.md", lines="  \n"),
+                "nothing to add",
+                "nothing to add",
+            ),
+            (
+                _call("write", path="notes/old-note", text="again"),
+                "notes/old-note.md already exists — open it and call append",
+                "page exists",
+            ),
+            (
+                _call("write", path="beings/new-friend", text="hello"),
+                "not a page this verb founds: beings/new-friend",
+                "not a new notes/ page",
+            ),
+            (
+                _call("write", path="notes/Bad Name", text="hello"),
+                "not a page this verb founds: notes/Bad Name",
+                "not a new notes/ page",
+            ),
+        ],
+    )
+    async def test_a_write_the_verb_will_not_make_is_said_and_kept_as_a_row(
+        self, conversation, pen, call, said, reason
+    ):
+        before = self._git(pen, "rev-parse", "HEAD")
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_write"
+        ) as record_write:
+            mocked.post(URL, payload=_answer(calls=[call]))
+            mocked.post(URL, payload=_answer("ah, right"))
+            result = await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        assert said in second["messages"][3]["content"]
+        assert self._git(pen, "rev-parse", "HEAD") == before  # nothing landed
+        assert not (pen / "traces").glob("*.jsonl") or not list(
+            (pen / "traces").iterdir()
+        )
+        args, meta = record_write.call_args
+        assert args[2:] == (call["function"]["name"], False)
+        assert meta["reason"] == reason
+        assert result.written == ()
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_a_dirty_tree_refuses_the_write_and_changes_nothing(
+        self, conversation, pen
+    ):
+        (pen / "notes" / "old-note.md").write_text("edited by hand\n", encoding="utf-8")
+        with aioresponses_ctx() as mocked, patch(
+            "core.capture.record_faebot_write"
+        ) as record_write:
+            mocked.post(
+                URL,
+                payload=_answer(
+                    calls=[_call("append", path="commons/the-commons.md", lines="x")]
+                ),
+            )
+            mocked.post(URL, payload=_answer("later, then"))
+            await core.generate_response("testchannel")
+            _, second = _requests(mocked)
+        assert "unfinished change on disk" in second["messages"][3]["content"]
+        assert "pebble" not in (pen / "commons" / "the-commons.md").read_text()
+        assert record_write.call_args.kwargs["reason"] == "dirty tree"
+        await core.close_session()
+
+    @pytest.mark.asyncio
+    async def test_with_only_a_reader_a_write_that_reaches_the_floor_says_no_pen(
+        self, conversation, pen
+    ):
+        """The reader never offers the pen, so this is the wire calling a
+        verb it wasn't given — dispatch refuses it before the floor. The
+        floor's own guard is tested by hand."""
+        core.diary = DiaryReader(pen)
+        with patch("core.capture.record_faebot_write") as record_write:
+            word = core._land("notes/x.md", "x\n", "write", "", [], "testchannel", "g1")
+        assert word.startswith("not written — this body has no pen connected")
+        assert record_write.call_args.kwargs["reason"] == "no pen"
+
+    def test_the_hand_names_the_body_and_the_channel(self):
+        hand = desk_verbs.hand_for("transfaeries", why="  a why  ")
+        assert hand.act == "body-write" and hand.nod == "faebot"
+        assert hand.by == "by faebot's twitch body in #transfaeries"
+        assert hand.trace == {"body": "twitch", "room": "#transfaeries"}
+        assert hand.why == "a why"
+        nameless = desk_verbs.hand_for(None)
+        assert nameless.by == "by faebot's twitch body in an unnamed channel"
+        assert nameless.trace["room"] == "unknown"

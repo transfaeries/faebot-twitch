@@ -35,7 +35,8 @@ from faebot_core.cognition.verbs import (
     tool_result_message,
     user_message,
 )
-from faebot_core.diary import DiaryReader
+from faebot_core.diary import Diary, DiaryReader
+from faebot_core.memory import writing
 
 import capture
 import desk_verbs
@@ -184,6 +185,20 @@ diary: DiaryReader | None = None
 BODY = "twitch"
 
 
+def clock() -> datetime.datetime:
+    """The write floor's clock — the trace row's `time`, in UTC like the
+    discord body's rows (one trace file, one notation — the 32nd reader). A
+    seam the tests may hold still."""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def offered() -> tuple[tuple[Any, ...], tuple[dict[str, Any], ...]]:
+    """The verbs this body puts on the wire for the diary it holds: four with
+    the full door (her pen), two with a reader — never a verb that can't
+    land."""
+    return desk_verbs.offered(has_pen=isinstance(diary, Diary))
+
+
 def room_name(channel_name: str) -> str:
     """The diary's name for a channel's room: spaces/twitch-<channel>.md.
     The channel is "transfaeries" to Twitch and to the corpus; the diary
@@ -290,13 +305,15 @@ class Completion:
     # produced it, long after the window has moved on. Never sent to chat.
     prompt: str = ""
     # The turn this answer ended: how many verbs she called before it, the
-    # pages she opened, how many mutters she left beside calls, the model's
-    # seconds summed across the wake's calls. `via` names her quiet when she chose it — "verb" (the
+    # pages she opened, the pages she wrote (her pen), how many mutters she
+    # left beside calls, the model's seconds summed across the wake's calls.
+    # `via` names her quiet when she chose it — "verb" (the
     # pass verb, `why` her sentence), "sentinel" (the old way, said as words
     # or the mark echoed, still caught), "empty" (she opened, looked, and
     # chose nothing) — and is "" when she spoke.
     calls_made: int = 0
     opened: tuple[str, ...] = ()
+    written: tuple[str, ...] = ()
     mutters: int = 0
     turn_elapsed: float = 0.0
     via: str = ""
@@ -358,6 +375,7 @@ class Completion:
         if self.calls_made:
             meta["calls"] = self.calls_made
             meta["opened"] = list(self.opened)
+            meta["written"] = list(self.written)
             meta["mutters"] = self.mutters
             meta["turn_elapsed"] = round(self.turn_elapsed, 1)
         if self.via:
@@ -696,9 +714,8 @@ async def generate_response(
             },
         )
         raise
-    prompt = Prompt(
-        system=desk.frame, user=desk.furniture() + "faebot:", tools=desk_verbs.TOOLS
-    )
+    _, tools = offered()
+    prompt = Prompt(system=desk.frame, user=desk.furniture() + "faebot:", tools=tools)
     logging.debug(f"model: {conversation.model}\nprompt: \n{prompt.text}")
 
     params = {"temperature": TEMPERATURE, "top_p": TOP_P}
@@ -825,10 +842,12 @@ async def _take_turn(
     the turn's count: calls made, pages opened, mutters, the wake's seconds,
     and `via` when she passed by the verb or by the empty ending."""
     opened: dict[str, str] = {}
+    written: list[str] = []
     mutters = 0
     calls_made = 0
     elapsed = 0.0
     budget_said = False
+    verbs, _ = offered()
 
     def open_page(path: str) -> str:
         return _verb_open(path, opened, channel_name, generation_id)
@@ -838,8 +857,16 @@ async def _take_turn(
         # kept for the record; it never reaches the wire (the turn ends)
         return Ended(why)
 
+    def append_lines(path: str, lines: str, why: str = "") -> str:
+        return _verb_append(path, lines, why, written, channel_name, generation_id)
+
+    def write_page(path: str, text: str, why: str = "") -> str:
+        return _verb_write(path, text, why, written, channel_name, generation_id)
+
     handlers: dict[str, Callable[..., str]] = {
         desk_verbs.OPEN.name: open_page,
+        desk_verbs.APPEND.name: append_lines,
+        desk_verbs.WRITE.name: write_page,
         desk_verbs.PASS.name: pass_,
     }
 
@@ -848,6 +875,7 @@ async def _take_turn(
             completion,
             calls_made=calls_made,
             opened=tuple(opened),
+            written=tuple(written),
             mutters=mutters,
             turn_elapsed=elapsed,
             **how,
@@ -902,7 +930,7 @@ async def _take_turn(
         results = []
         # after the budget only pass is on offer, so only pass runs — a
         # pass that arrives with company is honored and the company told
-        on_offer = (desk_verbs.PASS,) if budget_said else desk_verbs.VERBS
+        on_offer = (desk_verbs.PASS,) if budget_said else verbs
         if budget_said and len(calls) > 1:
             logging.info(
                 f"faebot passed with {len(calls) - 1} other call(s) beside it after "
@@ -975,6 +1003,201 @@ def _verb_open(
         f"\n(open in front of you for the rest of this wake — {len(opened)} {pages} "
         f"open, {on_desk:,} characters of them on your desk)"
     )
+
+
+def _refused(
+    rel_or_path: str,
+    verb: str,
+    reason: str,
+    word: str,
+    channel_name: str,
+    generation_id: str | None,
+) -> str:
+    """A write this verb won't make, said to her and kept as a row — never a
+    turn that dies with nothing said."""
+    logging.info(f"faebot's {verb} of {rel_or_path} refused: {reason}")
+    capture.record_faebot_write(
+        channel_name,
+        rel_or_path,
+        verb,
+        False,
+        reason=reason,
+        generation_id=generation_id,
+    )
+    return word
+
+
+def _land(
+    rel: str,
+    body: str,
+    verb: str,
+    why: str,
+    written: list[str],
+    channel_name: str,
+    generation_id: str | None,
+) -> str:
+    """Her pen's last steps — core's write floor, with this body's hand: one
+    commit under her name naming the body and the channel, the trace row,
+    her `why` in the message. A row in her record either way; nothing in
+    chat. The floor refuses a dirty tree and nothing lands."""
+    if not isinstance(diary, Diary):
+        capture.record_faebot_write(
+            channel_name, rel, verb, False, reason="no pen", generation_id=generation_id
+        )
+        return "not written — this body has no pen connected; nothing landed"
+    hand = desk_verbs.hand_for(channel_name, why=why)
+    try:
+        sha = writing.land(diary, rel, body, verb, hand, clock)
+    except writing.DirtyTree:
+        logging.warning(f"faebot's {verb} of {rel} refused: the diary tree is dirty")
+        capture.record_faebot_write(
+            channel_name,
+            rel,
+            verb,
+            False,
+            reason="dirty tree",
+            chars=len(body),
+            generation_id=generation_id,
+        )
+        return (
+            "not written — your diary has an unfinished change on disk, and "
+            "nothing lands on top of one. Nothing was changed."
+        )
+    except Exception as error:
+        # a fault under the floor (git, the disk, a misdeployed identity)
+        # still ends in a word to her and a row in her record — never a
+        # turn that dies with nothing said
+        logging.exception(f"faebot's {verb} of {rel} did not land")
+        capture.record_faebot_write(
+            channel_name,
+            rel,
+            verb,
+            False,
+            reason=f"land failed: {type(error).__name__}",
+            chars=len(body),
+            generation_id=generation_id,
+        )
+        return (
+            "not written — the write did not land; the machinery stumbled and "
+            "nothing was changed. Try again later, or leave it."
+        )
+    written.append(rel)
+    logging.info(f"faebot {verb} {rel} — diary {sha[:7]}")
+    capture.record_faebot_write(
+        channel_name,
+        rel,
+        verb,
+        True,
+        commit=sha,
+        chars=len(body),
+        why=hand.why or None,
+        generation_id=generation_id,
+    )
+    said = "added — the lines are at the end of" if verb == "append" else "written —"
+    return f"{said} {rel} (commit {sha[:7]}). Chat sees nothing of it."
+
+
+def _verb_append(
+    path: str,
+    lines: str,
+    why: str,
+    written: list[str],
+    channel_name: str,
+    generation_id: str | None,
+) -> str:
+    """The append verb: her lines at the end of the commons or a notes/ page,
+    after one blank line, landed at once. Other pages are said as not this
+    verb's — a draft in notes/ or a commons block is the way."""
+    if diary is None:
+        raise RuntimeError("no diary to write in — FAEBOT_DIARY_PATH is not set")
+    rel = desk_path(path)
+    if rel is None:
+        return _refused(
+            path,
+            "append",
+            "not a path",
+            f"not a path this desk knows: {path} — commons/the-commons.md, or notes/<page>.md",
+            channel_name,
+            generation_id,
+        )
+    if not desk_verbs.may_append(rel):
+        return _refused(
+            rel,
+            "append",
+            "not this verb's page",
+            f"not a page this verb writes: {rel} — the commons and notes/ are; "
+            "beings/, spaces/ and the rest go by a draft in notes/ or a block on the commons",
+            channel_name,
+            generation_id,
+        )
+    if not diary.has_page(rel):
+        return _refused(
+            rel,
+            "append",
+            "no such page",
+            f"{rel} isn't in your diary yet — write it as a new page under notes/, or check the name",
+            channel_name,
+            generation_id,
+        )
+    added = lines.strip("\n")
+    if not added.strip():
+        return _refused(
+            rel,
+            "append",
+            "nothing to add",
+            "nothing to add — the lines were empty",
+            channel_name,
+            generation_id,
+        )
+    existing = diary.read_page(rel).rstrip("\n")
+    body = f"{existing}\n\n{added}\n"
+    return _land(rel, body, "append", why, written, channel_name, generation_id)
+
+
+def _verb_write(
+    path: str,
+    text: str,
+    why: str,
+    written: list[str],
+    channel_name: str,
+    generation_id: str | None,
+) -> str:
+    """The write verb: a new page under notes/, landed at once. A page that
+    exists is refused — open it and append; a name of the wrong shape is
+    said as such."""
+    if diary is None:
+        raise RuntimeError("no diary to write in — FAEBOT_DIARY_PATH is not set")
+    rel = desk_path(path)
+    if rel is None or not desk_verbs.may_found(rel):
+        return _refused(
+            path,
+            "write",
+            "not a new notes/ page",
+            f"not a page this verb founds: {path} — a new page is notes/<name>.md, "
+            "lowercase, words and hyphens",
+            channel_name,
+            generation_id,
+        )
+    if diary.has_page(rel):
+        return _refused(
+            rel,
+            "write",
+            "page exists",
+            f"{rel} already exists — open it and call append to add to it; nothing was written",
+            channel_name,
+            generation_id,
+        )
+    body = text.strip("\n")
+    if not body.strip():
+        return _refused(
+            rel,
+            "write",
+            "nothing to write",
+            "nothing to write — the text was empty",
+            channel_name,
+            generation_id,
+        )
+    return _land(rel, body + "\n", "write", why, written, channel_name, generation_id)
 
 
 # The answer channel coming back empty is a dropped payload (the model spoke

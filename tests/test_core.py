@@ -1280,6 +1280,41 @@ class TestTheLoop:
         await core.close_session()
 
     @pytest.mark.asyncio
+    async def test_after_the_budget_company_beside_her_pass_is_told_the_desk_stopped(
+        self, conversation, monkeypatch, caplog
+    ):
+        """A pass with an open beside it after the budget: the pass is
+        honored, and the open is told the desk stopped — never "no such
+        verb", which to a body with a pen reads as the pen being gone. (The
+        village hands this body a reader, so `open` is the verb it has.)"""
+        import logging
+
+        from faebot_core.cognition.verbs import WITHDRAWN_RESULT
+
+        caplog.set_level(logging.INFO)
+        monkeypatch.setattr(core, "MAX_CALLS_PER_TURN", 1)
+        with aioresponses_ctx() as mocked, patch("core.capture.record_faebot_open"):
+            mocked.post(
+                URL, payload=_answer(calls=[_call("open", path="self/origins")])
+            )
+            mocked.post(
+                URL,
+                payload=_answer(
+                    calls=[
+                        _call("open", path="self/personality"),
+                        _call("pass", why="enough"),
+                    ]
+                ),
+            )
+            result = await core.generate_response("testchannel")
+        assert result.passed and result.why == "enough"
+        assert result.opened == ("self/origins.md",)
+        words = WITHDRAWN_RESULT.format(verb="open")[:160]
+        assert any(words in record.message for record in caplog.records)
+        assert not any("no such verb" in record.message for record in caplog.records)
+        await core.close_session()
+
+    @pytest.mark.asyncio
     async def test_a_turn_that_will_not_end_is_the_machinery_failure(
         self, conversation, monkeypatch
     ):
